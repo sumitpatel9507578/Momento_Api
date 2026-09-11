@@ -42,6 +42,7 @@ async function register(req, res) {
       email,
       hashedPassword,
       fullName,
+      req.body.profileImage || null
     );
 
     const user = await userModel.getUserById(id);

@@ -3,12 +3,17 @@ const postModel = require("../models/postModel");
 // Create a post for the authenticated user
 async function createPost(req, res) {
   try {
-    const { caption, mediaUrl, mediaType } = req.body;
+    const { caption, mediaType } = req.body;
+    let mediaUrl = req.body.mediaUrl;
+
+    if (req.file) {
+      mediaUrl = `/uploads/${req.file.filename}`;
+    }
 
     if (!caption && !mediaUrl) {
       return res.status(400).json({
         success: false,
-        message: "Caption or mediaUrl is required",
+        message: "Caption or media are required",
         data: null,
       });
     }
@@ -34,10 +39,10 @@ async function createPost(req, res) {
       data: post,
     });
   } catch (error) {
-    console.error("Create post error:", error.message);
+    console.error("Create post error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to create post",
+      message: `Failed to create post: ${error.message}`,
       data: null,
     });
   }

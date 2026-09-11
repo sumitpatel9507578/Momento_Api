@@ -3,12 +3,17 @@ const postModel = require("../models/postModel");
 // Create a reel for the authenticated user
 async function createReel(req, res) {
   try {
-    const { videoUrl, caption, songId } = req.body;
+    const { caption, songId } = req.body;
+    let videoUrl = req.body.videoUrl;
+
+    if (req.file) {
+      videoUrl = `/uploads/${req.file.filename}`;
+    }
 
     if (!videoUrl) {
       return res.status(400).json({
         success: false,
-        message: "videoUrl is required",
+        message: "video file is required",
         data: null,
       });
     }
@@ -38,12 +43,17 @@ async function createReel(req, res) {
 // Create a story that expires after the supplied or default duration
 async function createStory(req, res) {
   try {
-    const { mediaUrl, mediaType, caption, expiresAt } = req.body;
+    const { mediaType, caption, expiresAt } = req.body;
+    let mediaUrl = req.body.mediaUrl;
+
+    if (req.file) {
+      mediaUrl = `/uploads/${req.file.filename}`;
+    }
 
     if (!mediaUrl) {
       return res.status(400).json({
         success: false,
-        message: "mediaUrl is required",
+        message: "media file is required",
         data: null,
       });
     }
