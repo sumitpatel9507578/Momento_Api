@@ -8,7 +8,14 @@ function authMiddleware(req, res, next) {
       ? authorization.slice(7)
       : null;
 
-  if (!token || !process.env.JWT_SECRET) {
+  console.log(`[AUTH] Incoming request: ${req.method} ${req.url}`);
+  console.log(`[AUTH] Authorization Header: ${authorization ? "Present" : "Missing"}`);
+  if (token) {
+    console.log(`[AUTH] Token prefix: ${token.substring(0, 10)}...`);
+  }
+
+  if (!token) {
+    console.log("[AUTH] Verification failed: No token provided");
     return res.status(401).json({
       success: false,
       message: "Authentication required",
@@ -16,10 +23,21 @@ function authMiddleware(req, res, next) {
     });
   }
 
+  if (!process.env.JWT_SECRET) {
+    console.error("[AUTH] Error: JWT_SECRET is not defined in .env");
+    return res.status(500).json({
+      success: false,
+      message: "Server configuration error",
+      data: null,
+    });
+  }
+
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
+    console.log(`[AUTH] Verification success: User ${req.user.username} (ID: ${req.user.id})`);
     return next();
   } catch (error) {
+    console.log(`[AUTH] Verification failed: ${error.message}`);
     return res.status(401).json({
       success: false,
       message: "Invalid or expired token",

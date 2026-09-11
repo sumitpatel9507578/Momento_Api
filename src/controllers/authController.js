@@ -46,10 +46,19 @@ async function register(req, res) {
 
     const user = await userModel.getUserById(id);
 
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" },
+    );
+
     return res.status(201).json({
       success: true,
       message: "User registered successfully",
-      data: user,
+      data: {
+        token,
+        user: user,
+      },
     });
   } catch (error) {
     console.error(error);
