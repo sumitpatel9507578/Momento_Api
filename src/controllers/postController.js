@@ -1,5 +1,50 @@
 const postModel = require("../models/postModel");
 
+// Get home feed
+async function getFeed(req, res) {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const offset = (page - 1) * limit;
+
+    const posts = await postModel.getFeed(limit, offset);
+
+    return res.status(200).json({
+      success: true,
+      message: "Feed fetched successfully",
+      data: posts,
+    });
+  } catch (error) {
+    console.error("Get feed error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch feed",
+      data: [],
+    });
+  }
+}
+
+// Get posts for a specific user
+async function getUserPosts(req, res) {
+  try {
+    const userId = req.params.userId;
+    const posts = await postModel.getPostsByUserId(userId);
+
+    return res.status(200).json({
+      success: true,
+      message: "User posts fetched successfully",
+      data: posts,
+    });
+  } catch (error) {
+    console.error("Get user posts error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user posts",
+      data: [],
+    });
+  }
+}
+
 // Create a post for the authenticated user
 async function createPost(req, res) {
   try {
@@ -18,19 +63,11 @@ async function createPost(req, res) {
       });
     }
 
-    if (mediaType && !["image", "video"].includes(mediaType)) {
-      return res.status(400).json({
-        success: false,
-        message: "mediaType must be image or video",
-        data: null,
-      });
-    }
-
     const post = await postModel.createPost(
       req.user.id,
       caption,
       mediaUrl,
-      mediaType,
+      mediaType || 'image',
     );
 
     return res.status(201).json({
@@ -48,103 +85,60 @@ async function createPost(req, res) {
   }
 }
 
-// Like a post once for the authenticated user
+// Like a post
 async function likePost(req, res) {
   try {
-    const postId = Number(req.params.postId);
-
-    if (!Number.isInteger(postId) || postId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid postId is required",
-        data: null,
-      });
-    }
-
-    const post = await postModel.getPostById(postId);
-
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        message: "Post not found",
-        data: null,
-      });
-    }
-
+    const postId = req.params.postId;
     const existingLike = await postModel.getLike(req.user.id, postId);
 
     if (existingLike) {
-      return res.status(409).json({
+      return res.status(400).json({
         success: false,
-        message: "Post already liked",
+        message: "Already liked",
         data: null,
       });
     }
 
-    const like = await postModel.createLike(req.user.id, postId);
+    await postModel.createLike(req.user.id, postId);
 
     return res.status(201).json({
       success: true,
-      message: "Post liked successfully",
-      data: like,
-    });
-  } catch (error) {
-    console.error("Like post error:", error.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to like post",
+      message: "Liked successfully",
       data: null,
     });
+  } catch (error) {
+    console.error("Like error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 }
 
-// Add a comment to an existing post
+// Add a comment
 async function createComment(req, res) {
   try {
-    const postId = Number(req.params.postId);
+    const { postId } = req.params;
     const { comment } = req.body;
 
-    if (!Number.isInteger(postId) || postId <= 0 || !comment) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid postId and comment are required",
-        data: null,
-      });
+    if (!comment) {
+      return res.status(400).json({ success: false, message: "Comment is required" });
     }
 
-    const post = await postModel.getPostById(postId);
-
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        message: "Post not found",
-        data: null,
-      });
-    }
-
-    const createdComment = await postModel.createComment(
-      req.user.id,
-      postId,
-      comment,
-    );
+    await postModel.createComment(req.user.id, postId, comment);
 
     return res.status(201).json({
       success: true,
-      message: "Comment created successfully",
-      data: createdComment,
-    });
-  } catch (error) {
-    console.error("Create comment error:", error.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create comment",
+      message: "Comment added",
       data: null,
     });
+  } catch (error) {
+    console.error("Comment error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 }
 
 module.exports = {
-  createComment,
+  getFeed,
+  getUserPosts,
   createPost,
   likePost,
+  createComment,
 };
