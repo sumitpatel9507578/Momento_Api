@@ -3,9 +3,9 @@ const db = require("../config/db");
 // Create a post for an authenticated user
 async function createPost(userId, caption, mediaUrl, mediaType) {
   const [result] = await db.query(
-    `INSERT INTO posts (user_id, caption, media_url, media_type)
+    `INSERT INTO posts (userId, caption, mediaUrl, mediaType)
      VALUES (?, ?, ?, ?)`,
-    [userId, caption || null, mediaUrl || null, mediaType || null],
+    [userId, caption || null, mediaUrl || null, mediaType || 'image'],
   );
 
   return getPostById(result.insertId);
@@ -14,9 +14,9 @@ async function createPost(userId, caption, mediaUrl, mediaType) {
 // Find a post by id with user info
 async function getPostById(postId) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name, u.profile_image
+    `SELECT p.*, u.username, u.full_name as fullName, u.profileImage
      FROM posts p
-     JOIN users u ON p.user_id = u.id
+     JOIN users u ON p.userId = u.id
      WHERE p.id = ?`,
     [postId],
   );
@@ -24,15 +24,15 @@ async function getPostById(postId) {
   return rows[0];
 }
 
-// Get all posts for home feed
+// Get all posts for home feed with correct subqueries
 async function getFeed(limit = 20, offset = 0) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name, u.profile_image,
-     (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likes_count,
-     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comments_count
+    `SELECT p.*, u.username, u.full_name as fullName, u.profileImage,
+     (SELECT COUNT(*) FROM likes WHERE postId = p.id) as likesCount,
+     (SELECT COUNT(*) FROM comments WHERE postId = p.id) as commentsCount
      FROM posts p
-     JOIN users u ON p.user_id = u.id
-     ORDER BY p.created_at DESC
+     JOIN users u ON p.userId = u.id
+     ORDER BY p.createdAt DESC
      LIMIT ? OFFSET ?`,
     [limit, offset],
   );
@@ -42,11 +42,13 @@ async function getFeed(limit = 20, offset = 0) {
 // Get posts for a specific user
 async function getPostsByUserId(userId) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name, u.profile_image
+    `SELECT p.*, u.username, u.full_name as fullName, u.profileImage,
+     (SELECT COUNT(*) FROM likes WHERE postId = p.id) as likesCount,
+     (SELECT COUNT(*) FROM comments WHERE postId = p.id) as commentsCount
      FROM posts p
-     JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ?
-     ORDER BY p.created_at DESC`,
+     JOIN users u ON p.userId = u.id
+     WHERE p.userId = ?
+     ORDER BY p.createdAt DESC`,
     [userId],
   );
   return rows;
@@ -55,7 +57,7 @@ async function getPostsByUserId(userId) {
 // Find an existing like
 async function getLike(userId, postId) {
   const [rows] = await db.query(
-    `SELECT id FROM likes WHERE user_id = ? AND post_id = ?`,
+    `SELECT id FROM likes WHERE userId = ? AND postId = ?`,
     [userId, postId],
   );
   return rows[0];
@@ -64,25 +66,51 @@ async function getLike(userId, postId) {
 // Create a like
 async function createLike(userId, postId) {
   const [result] = await db.query(
-    `INSERT INTO likes (user_id, post_id) VALUES (?, ?)`,
+    `INSERT INTO likes (userId, postId) VALUES (?, ?)`,
     [userId, postId],
   );
   return result.insertId;
 }
 
 // Create a comment
-async function createComment(userId, postId, comment) {
+async function createComment(userId, postId, comment, reelId = null) {
   const [result] = await db.query(
-    `INSERT INTO comments (user_id, post_id, comment) VALUES (?, ?, ?)`,
-    [userId, postId, comment],
+    `INSERT INTO comments (userId, postId, reelId, comment) VALUES (?, ?, ?, ?)`,
+    [userId, postId || null, reelId || null, comment],
   );
   return result.insertId;
+}
+
+// Get comments for a specific post
+async function getCommentsByPostId(postId) {
+  const [rows] = await db.query(
+    `SELECT c.*, u.username, u.profileImage
+     FROM comments c
+     JOIN users u ON c.userId = u.id
+     WHERE c.postId = ?
+     ORDER BY c.createdAt DESC`,
+    [postId],
+  );
+  return rows;
+}
+
+// Get comments for a specific reel
+async function getCommentsByReelId(reelId) {
+  const [rows] = await db.query(
+    `SELECT c.*, u.username, u.profileImage
+     FROM comments c
+     JOIN users u ON c.userId = u.id
+     WHERE c.reelId = ?
+     ORDER BY c.createdAt DESC`,
+    [reelId],
+  );
+  return rows;
 }
 
 // Reels Logic
 async function createReel(userId, videoUrl, caption, songId) {
   const [result] = await db.query(
-    `INSERT INTO reels (user_id, video_url, caption, song_name) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO reels (userId, videoUrl, caption, song_name) VALUES (?, ?, ?, ?)`,
     [userId, videoUrl, caption || null, songId || null],
   );
   return result.insertId;
@@ -90,10 +118,10 @@ async function createReel(userId, videoUrl, caption, songId) {
 
 async function getReels(limit = 10, offset = 0) {
   const [rows] = await db.query(
-    `SELECT r.*, u.username as creator_name, u.profile_image as thumbnail
+    `SELECT r.*, u.username as creator_name, u.profileImage as thumbnail
      FROM reels r
-     JOIN users u ON r.user_id = u.id
-     ORDER BY r.created_at DESC
+     JOIN users u ON r.userId = u.id
+     ORDER BY r.createdAt DESC
      LIMIT ? OFFSET ?`,
     [limit, offset],
   );
@@ -102,11 +130,11 @@ async function getReels(limit = 10, offset = 0) {
 
 async function getReelsByUserId(userId) {
   const [rows] = await db.query(
-    `SELECT r.*, u.username as creator_name, u.profile_image as thumbnail
+    `SELECT r.*, u.username as creator_name, u.profileImage as thumbnail
      FROM reels r
-     JOIN users u ON r.user_id = u.id
-     WHERE r.user_id = ?
-     ORDER BY r.created_at DESC`,
+     JOIN users u ON r.userId = u.id
+     WHERE r.userId = ?
+     ORDER BY r.createdAt DESC`,
     [userId],
   );
   return rows;
@@ -115,20 +143,20 @@ async function getReelsByUserId(userId) {
 // Stories Logic
 async function createStory(userId, mediaUrl, mediaType, caption, expiresAt) {
   const [result] = await db.query(
-    `INSERT INTO stories (user_id, media_url, media_type, caption, expires_at)
+    `INSERT INTO stories (userId, mediaUrl, mediaType, caption, expiresAt)
      VALUES (?, ?, ?, ?, ?)`,
-    [userId, mediaUrl, mediaType || null, caption || null, expiresAt],
+    [userId, mediaUrl, mediaType || 'image', caption || null, expiresAt],
   );
   return result.insertId;
 }
 
 async function getActiveStories() {
   const [rows] = await db.query(
-    `SELECT s.*, u.username, u.profile_image
+    `SELECT s.*, u.username, u.profileImage
      FROM stories s
-     JOIN users u ON s.user_id = u.id
-     WHERE s.expires_at > NOW()
-     ORDER BY s.created_at DESC`
+     JOIN users u ON s.userId = u.id
+     WHERE s.expiresAt > NOW()
+     ORDER BY s.createdAt DESC`
   );
   return rows;
 }
@@ -136,6 +164,7 @@ async function getActiveStories() {
 module.exports = {
   createComment,
   createLike,
+  createMessage: async () => {}, // placeholder
   createPost,
   createReel,
   createStory,

@@ -33,4 +33,11 @@ async function createFollow(followerId, followingId) {
 module.exports = {
   createFollow,
   getFollow,
+  deleteFollow: async (followerId, followingId) => {
+    const [result] = await db.query(
+      "DELETE FROM follows WHERE follower_id = ? AND following_id = ?",
+      [followerId, followingId],
+    );
+    return result.affectedRows > 0;
+  },
 };

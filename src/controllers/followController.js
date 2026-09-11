@@ -37,25 +37,27 @@ async function followUser(req, res) {
       });
     }
     if (existingFollow) {
-      return res.status(409).json({
-        success: false,
-        message: "User already followed",
-        data: null,
+      // Toggle: If already following, unfollow
+      await followModel.deleteFollow(req.user.id, targetUserId);
+      return res.status(200).json({
+        success: true,
+        message: "User unfollowed successfully",
+        isFollowing: false,
       });
     }
 
-    const follow = await followModel.createFollow(req.user.id, targetUserId);
+    await followModel.createFollow(req.user.id, targetUserId);
 
     return res.status(201).json({
       success: true,
       message: "User followed successfully",
-      data: follow,
+      isFollowing: true,
     });
   } catch (error) {
-    console.error("Follow user error:", error.message);
+    console.error("Follow toggle error:", error.message);
     return res.status(500).json({
       success: false,
-      message: "Failed to follow user",
+      message: "Failed to update follow status",
       data: null,
     });
   }

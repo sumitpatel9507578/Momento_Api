@@ -76,7 +76,29 @@ async function updateProfile(req, res) {
   }
 }
 
+// Search for users
+async function searchUsers(req, res) {
+  try {
+    const { q } = req.query;
+    const users = await userModel.searchUsers(q || "");
+
+    return res.status(200).json({
+      success: true,
+      message: "Users searched successfully",
+      data: users,
+    });
+  } catch (error) {
+    console.error("Search users error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to search users",
+      data: [],
+    });
+  }
+}
+
 module.exports = {
   getMe,
   updateProfile,
+  searchUsers,
 };

@@ -4,7 +4,7 @@ const db = require("../config/db");
 async function createUser(username, email, password, fullName = null, profileImage = null) {
   const [result] = await db.query(
     `INSERT INTO users
-    (username, email, password, full_name, profile_image)
+    (username, email, password, full_name, profileImage)
     VALUES (?, ?, ?, ?, ?)`,
     [username, email, password, fullName, profileImage],
   );
@@ -33,7 +33,7 @@ async function getUserById(id) {
       email,
       full_name,
       bio,
-      profile_image,
+      profileImage,
       is_active,
       created_at,
       updated_at
@@ -57,12 +57,27 @@ async function getUserByUsername(username) {
   return rows[0];
 }
 
+// Search for users by username or full name
+async function searchUsers(query) {
+  const [rows] = await db.query(
+    `SELECT id, username, full_name, profileImage
+     FROM users
+     WHERE username LIKE ? OR full_name LIKE ?
+     LIMIT 20`,
+    [`%${query}%`, `%${query}%`],
+  );
+
+  return rows;
+}
+
 async function updateUser(id, updates) {
   const fields = [];
   const values = [];
 
   for (const [key, value] of Object.entries(updates)) {
-    fields.push(`${key} = ?`);
+    // Map JS keys to DB keys if necessary
+    const dbKey = key === 'fullName' ? 'full_name' : (key === 'profile_image' ? 'profileImage' : key);
+    fields.push(`${dbKey} = ?`);
     values.push(value);
   }
 

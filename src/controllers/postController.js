@@ -1,4 +1,5 @@
 const postModel = require("../models/postModel");
+const db = require("../config/db");
 
 // Get home feed
 async function getFeed(req, res) {
@@ -7,7 +8,7 @@ async function getFeed(req, res) {
     const limit = 20;
     const offset = (page - 1) * limit;
 
-    const posts = await postModel.getFeed(limit, offset);
+    const posts = await postModel.getFeed(Number(limit), Number(offset));
 
     return res.status(200).json({
       success: true,
@@ -85,18 +86,16 @@ async function createPost(req, res) {
   }
 }
 
-// Like a post
+// Like/Unlike a post
 async function likePost(req, res) {
   try {
     const postId = req.params.postId;
     const existingLike = await postModel.getLike(req.user.id, postId);
 
     if (existingLike) {
-      return res.status(400).json({
-        success: false,
-        message: "Already liked",
-        data: null,
-      });
+      // If already liked, unlike it
+      await db.query("DELETE FROM likes WHERE user_id = ? AND post_id = ?", [req.user.id, postId]);
+      return res.status(200).json({ success: true, message: "Unliked" });
     }
 
     await postModel.createLike(req.user.id, postId);
@@ -115,14 +114,14 @@ async function likePost(req, res) {
 // Add a comment
 async function createComment(req, res) {
   try {
-    const { postId } = req.params;
+    const { postId, reelId } = req.params;
     const { comment } = req.body;
 
     if (!comment) {
       return res.status(400).json({ success: false, message: "Comment is required" });
     }
 
-    await postModel.createComment(req.user.id, postId, comment);
+    await postModel.createComment(req.user.id, postId, comment, reelId);
 
     return res.status(201).json({
       success: true,
@@ -135,10 +134,38 @@ async function createComment(req, res) {
   }
 }
 
+// Get comments for a post or reel
+async function getComments(req, res) {
+  try {
+    const { postId, reelId } = req.params;
+    let comments;
+
+    if (postId) {
+      comments = await postModel.getCommentsByPostId(postId);
+    } else if (reelId) {
+      comments = await postModel.getCommentsByReelId(reelId);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Comments fetched successfully",
+      data: comments,
+    });
+  } catch (error) {
+    console.error("Get comments error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch comments",
+      data: [],
+    });
+  }
+}
+
 module.exports = {
   getFeed,
   getUserPosts,
   createPost,
   likePost,
   createComment,
+  getComments,
 };
