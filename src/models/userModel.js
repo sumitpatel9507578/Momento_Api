@@ -1,92 +1,106 @@
 const db = require("../config/db");
 
-// Create a user record and return its generated id
-async function createUser(username, email, password, fullName = null, profileImage = null) {
-  const [result] = await db.query(
-    `INSERT INTO users
-    (username, email, password, full_name, profile_image)
-    VALUES (?, ?, ?, ?, ?)`,
-    [username, email, password, fullName, profileImage],
-  );
+// Diagnostic: Get table structure to log on server start
+async function getTableInfo() {
+  try {
+    const [columns] = await db.query("SHOW COLUMNS FROM users");
+    console.log("[DIAGNOSTIC] 'users' table columns:", columns.map(c => c.Field).join(", "));
+    return columns.map(c => c.Field);
+  } catch (err) {
+    console.error("[DIAGNOSTIC] Failed to get table info:", err.message);
+    return [];
+  }
+}
 
+// Create a user record with fallback for column names
+async function createUser(username, email, password, name = null, profileImage = null) {
+  const cols = await getTableInfo();
+
+  // Decide which name column to use
+  const nameCol = cols.includes('full_name') ? 'full_name' : (cols.includes('name') ? 'name' : null);
+  const imgCol = cols.includes('profile_image') ? 'profile_image' : (cols.includes('profileImage') ? 'profileImage' : null);
+
+  let query = `INSERT INTO users (username, email, password`;
+  const params = [username, email, password];
+
+  if (nameCol) {
+    query += `, ${nameCol}`;
+    params.push(name);
+  }
+  if (imgCol) {
+    query += `, ${imgCol}`;
+    params.push(profileImage);
+  }
+
+  query += `) VALUES (?, ?, ?, ?, ?)`.replace(", ?, ?)", nameCol && imgCol ? ", ?, ?)" : (nameCol || imgCol ? ", ?)" : ")"));
+
+  // Fix the placeholder count dynamically
+  const placeholders = params.map(() => '?').join(', ');
+  const finalQuery = `INSERT INTO users (username, email, password${nameCol ? ', '+nameCol : ''}${imgCol ? ', '+imgCol : ''}) VALUES (${placeholders})`;
+
+  const [result] = await db.query(finalQuery, params);
   return result.insertId;
 }
 
-// Find a user by email for registration checks and login verification
 async function getUserByEmail(email) {
-  const [rows] = await db.query(
-    `SELECT *
-     FROM users
-     WHERE email = ?`,
-    [email],
-  );
-
+  const [rows] = await db.query(`SELECT * FROM users WHERE email = ?`, [email]);
   return rows[0];
 }
 
-// Find a user by id without returning the password hash
 async function getUserById(id) {
-  const [rows] = await db.query(
-    `SELECT
-      id,
-      username,
-      email,
-      full_name,
-      bio,
-      profile_image,
-      is_active,
-      created_at,
-      updated_at
-     FROM users
-     WHERE id = ?`,
-    [id],
-  );
+  const [rows] = await db.query(`SELECT * FROM users WHERE id = ?`, [id]);
+  if (!rows[0]) return null;
 
-  return rows[0];
+  // Map fields to a standard format for the app
+  const user = rows[0];
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    name: user.full_name || user.name || '',
+    bio: user.bio || '',
+    profileImage: user.profile_image || user.profileImage || '',
+    createdAt: user.created_at || user.createdAt || null
+  };
 }
 
-// Find a user by username for duplicate checks
 async function getUserByUsername(username) {
-  const [rows] = await db.query(
-    `SELECT *
-     FROM users
-     WHERE username = ?`,
-    [username],
-  );
-
+  const [rows] = await db.query(`SELECT * FROM users WHERE username = ?`, [username]);
   return rows[0];
 }
 
-// Search for users by username or full name
 async function searchUsers(query) {
   const [rows] = await db.query(
-    `SELECT id, username, full_name, profile_image
-     FROM users
-     WHERE username LIKE ? OR full_name LIKE ?
-     LIMIT 20`,
-    [`%${query}%`, `%${query}%`],
+    `SELECT * FROM users WHERE username LIKE ? OR full_name LIKE ? OR name LIKE ? LIMIT 20`,
+    [`%${query}%`, `%${query}%`, `%${query}%`]
   );
-
-  return rows;
+  return rows.map(user => ({
+    id: user.id,
+    username: user.username,
+    name: user.full_name || user.name || '',
+    profileImage: user.profile_image || user.profileImage || ''
+  }));
 }
 
 async function updateUser(id, updates) {
+  const cols = await getTableInfo();
   const fields = [];
   const values = [];
 
   for (const [key, value] of Object.entries(updates)) {
-    fields.push(`${key} = ?`);
-    values.push(value);
+    let dbKey = key;
+    if (key === 'fullName' || key === 'name') dbKey = cols.includes('full_name') ? 'full_name' : 'name';
+    if (key === 'profileImage') dbKey = cols.includes('profile_image') ? 'profile_image' : 'profileImage';
+
+    if (cols.includes(dbKey)) {
+      fields.push(`${dbKey} = ?`);
+      values.push(value);
+    }
   }
 
   if (fields.length === 0) return null;
-
   values.push(id);
-  const [result] = await db.query(
-    `UPDATE users SET ${fields.join(", ")} WHERE id = ?`,
-    values,
-  );
-
+  const [result] = await db.query(`UPDATE users SET ${fields.join(", ")} WHERE id = ?`, values);
   return result.affectedRows > 0;
 }
 
