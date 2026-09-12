@@ -37,12 +37,17 @@ async function register(req, res) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    let profileImage = req.body.profileImage || null;
+    if (req.file) {
+      profileImage = `/uploads/${req.file.filename}`;
+    }
+
     const id = await userModel.createUser(
       username,
       email,
       hashedPassword,
       fullName,
-      req.body.profileImage || null
+      profileImage
     );
 
     const user = await userModel.getUserById(id);
