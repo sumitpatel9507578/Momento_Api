@@ -3,33 +3,59 @@ const jwt = require("jsonwebtoken");
 const userModel = require("../models/userModel");
 
 async function register(req, res) {
-  console.log("[AUTH] Register request received:", req.body.username);
+  console.log(
+    "[AUTH] Register request received:",
+    req.body.username || req.body.email,
+  );
   try {
-    const { username, email, password, fullName } = req.body;
+    const { username, email, password } = req.body;
+
+    // Support all possible name field formats from client (fullName, full_name, name)
+    const fullName =
+      req.body.fullName || req.body.full_name || req.body.name || "";
 
     if (!username || !email || !password) {
-      return res.status(400).json({ success: false, message: "Required fields missing" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Required fields missing (username, email, password)",
+        });
     }
 
     const existingUser = await userModel.getUserByEmail(email);
-    if (existingUser) return res.status(400).json({ success: false, message: "Email already taken" });
+    if (existingUser)
+      return res
+        .status(400)
+        .json({ success: false, message: "Email already taken" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    let profileImage = req.body.profileImage || null;
+    // Support all possible profile image field formats from client
+    let profileImage =
+      req.body.profileImage ||
+      req.body.profile_image ||
+      req.body.profileimage ||
+      null;
     if (req.file) {
       profileImage = `/uploads/${req.file.filename}`;
       console.log("[AUTH] Profile image uploaded:", profileImage);
     }
 
-    const id = await userModel.createUser(username, email, hashedPassword, fullName, profileImage);
+    const id = await userModel.createUser(
+      username,
+      email,
+      hashedPassword,
+      fullName,
+      profileImage,
+    );
     console.log("[AUTH] User created in DB with ID:", id);
 
     const user = await userModel.getUserById(id);
     const token = jwt.sign(
       { id: user.id, username: user.username, email: user.email },
-      process.env.JWT_SECRET || 'momento_fallback_secret',
-      { expiresIn: "7d" }
+      process.env.JWT_SECRET || "momento_fallback_secret",
+      { expiresIn: "7d" },
     );
 
     return res.status(201).json({
@@ -39,10 +65,20 @@ async function register(req, res) {
     });
   } catch (error) {
     console.error("[AUTH] Register Crash:", error);
+
+    // Handle MySQL duplicate entry gracefully
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        success: false,
+        message: "Email or username already exists",
+        error_detail: error.sqlMessage,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: `Server Error: ${error.message}`,
-      error_detail: error.code // To catch SQL errors like ER_BAD_FIELD_ERROR
+      error_detail: error.code, // Catches SQL errors like ER_BAD_FIELD_ERROR
     });
   }
 }
@@ -52,16 +88,22 @@ async function login(req, res) {
     const { email, password } = req.body;
     const userInDb = await userModel.getUserByEmail(email);
 
-    if (!userInDb) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!userInDb)
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
 
     const isMatch = await bcrypt.compare(password, userInDb.password);
-    if (!isMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!isMatch)
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
 
     const user = await userModel.getUserById(userInDb.id);
     const token = jwt.sign(
       { id: user.id, username: user.username, email: user.email },
-      process.env.JWT_SECRET || 'momento_fallback_secret',
-      { expiresIn: "7d" }
+      process.env.JWT_SECRET || "momento_fallback_secret",
+      { expiresIn: "7d" },
     );
 
     return res.status(200).json({
