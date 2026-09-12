@@ -1,14 +1,14 @@
 const postModel = require("../models/postModel");
 const db = require("../config/db");
 
-// Get home feed
+// --- Feed ---
 async function getFeed(req, res) {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 20;
+    const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    const posts = await postModel.getFeed(Number(limit), Number(offset));
+    const posts = await postModel.getFeed(limit, offset);
 
     return res.status(200).json({
       success: true,
@@ -17,15 +17,10 @@ async function getFeed(req, res) {
     });
   } catch (error) {
     console.error("Get feed error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch feed",
-      data: [],
-    });
+    return res.status(500).json({ success: false, message: "Failed to fetch feed", data: [] });
   }
 }
 
-// Get posts for a specific user
 async function getUserPosts(req, res) {
   try {
     const userId = req.params.userId;
@@ -38,15 +33,11 @@ async function getUserPosts(req, res) {
     });
   } catch (error) {
     console.error("Get user posts error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch user posts",
-      data: [],
-    });
+    return res.status(500).json({ success: false, message: "Failed to fetch user posts", data: [] });
   }
 }
 
-// Create a post for the authenticated user
+// --- Creation ---
 async function createPost(req, res) {
   try {
     const { caption, mediaType } = req.body;
@@ -57,19 +48,10 @@ async function createPost(req, res) {
     }
 
     if (!caption && !mediaUrl) {
-      return res.status(400).json({
-        success: false,
-        message: "Caption or media are required",
-        data: null,
-      });
+      return res.status(400).json({ success: false, message: "Caption or media are required" });
     }
 
-    const post = await postModel.createPost(
-      req.user.id,
-      caption,
-      mediaUrl,
-      mediaType || 'image',
-    );
+    const post = await postModel.createPost(req.user.id, caption, mediaUrl, mediaType || 'image');
 
     return res.status(201).json({
       success: true,
@@ -78,39 +60,32 @@ async function createPost(req, res) {
     });
   } catch (error) {
     console.error("Create post error:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Failed to create post: ${error.message}`,
-      data: null,
-    });
+    return res.status(500).json({ success: false, message: `Failed to create post: ${error.message}` });
   }
 }
 
-// Like/Unlike a post
+// --- Social ---
 async function likePost(req, res) {
   try {
-    const postId = req.params.postId;
-    const existingLike = await postModel.getLike(req.user.id, postId);
+    const { postId, reelId } = req.params;
+    const pId = postId || req.query.postId;
+    const rId = reelId || req.query.reelId;
+
+    const existingLike = await postModel.getLike(req.user.id, pId, rId);
 
     if (existingLike) {
-      await db.query("DELETE FROM likes WHERE user_id = ? AND post_id = ?", [req.user.id, postId]);
-      return res.status(200).json({ success: true, message: "Unliked" });
+      await postModel.deleteLike(req.user.id, pId, rId);
+      return res.status(200).json({ success: true, message: "Unliked", isLiked: false });
     }
 
-    await postModel.createLike(req.user.id, postId);
-
-    return res.status(201).json({
-      success: true,
-      message: "Liked successfully",
-      data: null,
-    });
+    await postModel.createLike(req.user.id, pId, rId);
+    return res.status(201).json({ success: true, message: "Liked", isLiked: true });
   } catch (error) {
     console.error("Like error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 }
 
-// Add a comment
 async function createComment(req, res) {
   try {
     const { postId, reelId } = req.params;
@@ -133,7 +108,6 @@ async function createComment(req, res) {
   }
 }
 
-// Get comments for a post or reel
 async function getComments(req, res) {
   try {
     const { postId, reelId } = req.params;
@@ -143,6 +117,8 @@ async function getComments(req, res) {
       comments = await postModel.getCommentsByPostId(postId);
     } else if (reelId) {
       comments = await postModel.getCommentsByReelId(reelId);
+    } else {
+      return res.status(400).json({ success: false, message: "ID is required" });
     }
 
     return res.status(200).json({
@@ -152,11 +128,7 @@ async function getComments(req, res) {
     });
   } catch (error) {
     console.error("Get comments error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch comments",
-      data: [],
-    });
+    return res.status(500).json({ success: false, message: "Failed to fetch comments", data: [] });
   }
 }
 
