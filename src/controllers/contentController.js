@@ -16,7 +16,9 @@ async function getReels(req, res) {
     });
   } catch (error) {
     console.error("Get reels error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch reels", data: [] });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch reels", data: [] });
   }
 }
 
@@ -33,7 +35,13 @@ async function getUserReels(req, res) {
     });
   } catch (error) {
     console.error("Get user reels error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch user reels", data: [] });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch user reels",
+        data: [],
+      });
   }
 }
 
@@ -42,16 +50,29 @@ async function createReel(req, res) {
   try {
     const { caption, songId } = req.body;
     let videoUrl = req.body.videoUrl;
+    const uploadedFile =
+      req.file ||
+      req.files?.video?.[0] ||
+      req.files?.media?.[0] ||
+      req.files?.file?.[0];
 
-    if (req.file) {
-      videoUrl = `/uploads/${req.file.filename}`;
+    if (uploadedFile) {
+      console.log("[REEL] Uploaded file field:", uploadedFile.fieldname);
+      videoUrl = `/uploads/${uploadedFile.filename}`;
     }
 
     if (!videoUrl) {
-      return res.status(400).json({ success: false, message: "video file is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "video file is required" });
     }
 
-    const reelId = await postModel.createReel(req.user.id, videoUrl, caption, songId);
+    const reelId = await postModel.createReel(
+      req.user.id,
+      videoUrl,
+      caption,
+      songId,
+    );
 
     return res.status(201).json({
       success: true,
@@ -60,7 +81,9 @@ async function createReel(req, res) {
     });
   } catch (error) {
     console.error("Create reel error:", error);
-    return res.status(500).json({ success: false, message: "Failed to create reel" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to create reel" });
   }
 }
 
@@ -75,7 +98,9 @@ async function getStories(req, res) {
     });
   } catch (error) {
     console.error("Get stories error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch stories", data: [] });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch stories", data: [] });
   }
 }
 
@@ -90,12 +115,22 @@ async function createStory(req, res) {
     }
 
     if (!mediaUrl) {
-      return res.status(400).json({ success: false, message: "media file is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "media file is required" });
     }
 
-    const expiration = expiresAt ? new Date(expiresAt) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const expiration = expiresAt
+      ? new Date(expiresAt)
+      : new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    const storyId = await postModel.createStory(req.user.id, mediaUrl, mediaType || 'image', caption, expiration);
+    const storyId = await postModel.createStory(
+      req.user.id,
+      mediaUrl,
+      mediaType || "image",
+      caption,
+      expiration,
+    );
 
     return res.status(201).json({
       success: true,
@@ -104,7 +139,9 @@ async function createStory(req, res) {
     });
   } catch (error) {
     console.error("Create story error:", error);
-    return res.status(500).json({ success: false, message: "Failed to create story" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to create story" });
   }
 }
 

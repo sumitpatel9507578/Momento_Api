@@ -180,28 +180,44 @@ async function getCommentsByReelId(reelId) {
 
 // --- Reels ---
 async function createReel(userId, videoUrl, caption, songId) {
-  const cols = await getTableCols("reels");
-  const uIdCol = cols.includes("userId") ? "userId" : "user_id";
-  const urlCol = cols.includes("videoUrl") ? "videoUrl" : "video_url";
-  await db.query(
-    `INSERT INTO reels (${uIdCol}, ${urlCol}, caption, songId) VALUES (?, ?, ?, ?)`,
-    [userId, videoUrl, caption, songId],
+  const [result] = await db.query(
+    `INSERT INTO reels (user_id, video_url, caption, song_name) VALUES (?, ?, ?, ?)`,
+    [userId, videoUrl, caption || null, songId || null],
   );
+  return result.insertId;
 }
 
 async function getReels(limit = 10, offset = 0) {
   const [rows] = await db.query(
-    `SELECT r.*, u.username as creator_name, u.profileImage, u.profile_image,
-     (SELECT COUNT(*) FROM likes WHERE reelId = r.id OR reel_id = r.id) as likes_count,
-     (SELECT COUNT(*) FROM comments WHERE reelId = r.id OR reel_id = r.id) as comments_count
-     FROM reels r JOIN users u ON (r.userId = u.id OR r.user_id = u.id) ORDER BY r.id DESC LIMIT ? OFFSET ?`,
+    `SELECT r.*, u.username, u.full_name AS name, u.profileImage AS profile_image
+     FROM reels r
+     JOIN users u ON r.user_id = u.id
+     ORDER BY r.created_at DESC
+     LIMIT ? OFFSET ?`,
     [limit, offset],
   );
   return rows.map((r) => ({
     ...r,
-    userId: r.userId || r.user_id,
-    videoUrl: r.videoUrl || r.video_url,
-    thumbnail: r.profileImage || r.profile_image || "",
+    userId: r.user_id,
+    videoUrl: r.video_url,
+    profileImage: r.profile_image || "",
+  }));
+}
+
+async function getReelsByUserId(userId) {
+  const [rows] = await db.query(
+    `SELECT r.*, u.username, u.full_name AS name, u.profileImage AS profile_image
+     FROM reels r
+     JOIN users u ON r.user_id = u.id
+     WHERE r.user_id = ?
+     ORDER BY r.created_at DESC`,
+    [userId],
+  );
+  return rows.map((r) => ({
+    ...r,
+    userId: r.user_id,
+    videoUrl: r.video_url,
+    profileImage: r.profile_image || "",
   }));
 }
 
@@ -241,6 +257,7 @@ module.exports = {
   getCommentsByReelId,
   createReel,
   getReels,
+  getReelsByUserId,
   createStory,
   getActiveStories,
   createMessage: async () => {}, // placeholder

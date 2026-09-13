@@ -7,7 +7,16 @@ const upload = require("../middleware/uploadMiddleware");
 router.get("/", authMiddleware, contentController.getReels);
 router.get("/user/:userId", authMiddleware, contentController.getUserReels);
 router.get("/:reelId/comments", authMiddleware, postController.getComments);
-router.post("/", authMiddleware, upload.single("video"), contentController.createReel);
+router.post(
+  "/",
+  authMiddleware,
+  upload.fields([
+    { name: "video", maxCount: 1 },
+    { name: "media", maxCount: 1 },
+    { name: "file", maxCount: 1 },
+  ]),
+  contentController.createReel,
+);
 router.post("/:reelId/comments", authMiddleware, postController.createComment);
 
 module.exports = router;
