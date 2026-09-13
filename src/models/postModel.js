@@ -28,7 +28,7 @@ async function createPost(userId, caption, mediaUrl, mediaType) {
 
 async function getPostById(postId) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ?`,
+    `SELECT p.*, u.username, u.full_name, u.profileImage FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ?`,
     [postId],
   );
   return _mapPost(rows[0]);
@@ -36,7 +36,7 @@ async function getPostById(postId) {
 
 async function getFeed(limit = 20, offset = 0) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image,
+    `SELECT p.*, u.username, u.full_name, u.profileImage,
      (SELECT COUNT(*) FROM likes WHERE postId = p.id OR post_id = p.id) as likesCount,
      (SELECT COUNT(*) FROM comments WHERE postId = p.id OR post_id = p.id) as commentsCount
      FROM posts p
@@ -50,7 +50,7 @@ async function getFeed(limit = 20, offset = 0) {
 
 async function getPostsByUserId(userId) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image
+    `SELECT p.*, u.username, u.full_name, u.profileImage
      FROM posts p
      JOIN users u ON p.user_id = u.id
      WHERE p.user_id = ?
