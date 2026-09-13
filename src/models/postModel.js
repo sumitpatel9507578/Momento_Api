@@ -140,19 +140,32 @@ async function deleteLike(userId, postId, reelId = null) {
 
 async function createComment(userId, postId, comment, reelId = null) {
   const cols = await getTableCols("comments");
-  const uIdCol = cols.includes("userId") ? "userId" : "user_id";
-  const pIdCol = cols.includes("postId") ? "postId" : "post_id";
-  const rIdCol = cols.includes("reelId") ? "reelId" : "reel_id";
+  const valueColumns = [
+    cols.includes("userId") ? "userId" : "user_id",
+    cols.includes("postId") ? "postId" : "post_id",
+    "comment",
+  ];
+  const values = [userId, postId, comment];
+
+  if (reelId) {
+    const reelIdCol = cols.includes("reelId") ? "reelId" : "reel_id";
+    if (!cols.includes(reelIdCol)) {
+      throw new Error("Comments table does not support reel comments");
+    }
+    valueColumns.splice(1, 1, reelIdCol);
+    values.splice(1, 1, reelId);
+  }
+
   await db.query(
-    `INSERT INTO comments (${uIdCol}, ${pIdCol}, ${rIdCol}, comment) VALUES (?, ?, ?, ?)`,
-    [userId, postId, reelId, comment],
+    `INSERT INTO comments (${valueColumns.join(", ")}) VALUES (${valueColumns.map(() => "?").join(", ")})`,
+    values,
   );
 }
 
 async function getCommentsByPostId(postId) {
   const [rows] = await db.query(
-    `SELECT c.*, u.username, u.profileImage, u.profile_image FROM comments c JOIN users u ON (c.userId = u.id OR c.user_id = u.id) WHERE c.postId = ? OR c.post_id = ? ORDER BY c.id DESC`,
-    [postId, postId],
+    `SELECT c.*, u.username, u.profileImage FROM comments c JOIN users u ON c.user_id = u.id WHERE c.post_id = ? ORDER BY c.id DESC`,
+    [postId],
   );
   return rows;
 }
