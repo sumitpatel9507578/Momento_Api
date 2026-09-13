@@ -79,14 +79,18 @@ function _mapPost(p) {
 
 // --- Social ---
 async function getLike(userId, postId, reelId = null) {
-  let query = "SELECT id FROM likes WHERE (userId = ? OR user_id = ?)";
-  let params = [userId, userId];
+  const cols = await getTableCols("likes");
+  const userIdCol = cols.includes("userId") ? "userId" : "user_id";
+  let query = `SELECT id FROM likes WHERE ${userIdCol} = ?`;
+  let params = [userId];
   if (postId) {
-    query += " AND (postId = ? OR post_id = ?)";
-    params.push(postId, postId);
+    const postIdCol = cols.includes("postId") ? "postId" : "post_id";
+    query += ` AND ${postIdCol} = ?`;
+    params.push(postId);
   } else if (reelId) {
-    query += " AND (reelId = ? OR reel_id = ?)";
-    params.push(reelId, reelId);
+    const reelIdCol = cols.includes("reelId") ? "reelId" : "reel_id";
+    query += ` AND ${reelIdCol} = ?`;
+    params.push(reelId);
   }
   const [rows] = await db.query(query, params);
   return rows[0];
@@ -94,12 +98,21 @@ async function getLike(userId, postId, reelId = null) {
 
 async function createLike(userId, postId, reelId = null) {
   const cols = await getTableCols("likes");
-  const uIdCol = cols.includes("userId") ? "userId" : "user_id";
-  const pIdCol = cols.includes("postId") ? "postId" : "post_id";
-  const rIdCol = cols.includes("reelId") ? "reelId" : "reel_id";
+  const userIdCol = cols.includes("userId") ? "userId" : "user_id";
+  const valueColumns = [userIdCol];
+  const values = [userId];
+
+  if (postId) {
+    valueColumns.push(cols.includes("postId") ? "postId" : "post_id");
+    values.push(postId);
+  } else if (reelId) {
+    valueColumns.push(cols.includes("reelId") ? "reelId" : "reel_id");
+    values.push(reelId);
+  }
+
   await db.query(
-    `INSERT INTO likes (${uIdCol}, ${pIdCol}, ${rIdCol}) VALUES (?, ?, ?)`,
-    [userId, postId, reelId],
+    `INSERT INTO likes (${valueColumns.join(", ")}) VALUES (${valueColumns.map(() => "?").join(", ")})`,
+    values,
   );
 }
 
