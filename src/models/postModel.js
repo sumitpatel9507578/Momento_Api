@@ -37,8 +37,8 @@ async function getPostById(postId) {
 async function getFeed(limit = 20, offset = 0) {
   const [rows] = await db.query(
     `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image,
-     (SELECT COUNT(*) FROM likes WHERE postId = p.id OR post_id = p.id) as likesCount,
-     (SELECT COUNT(*) FROM comments WHERE postId = p.id OR post_id = p.id) as commentsCount
+     (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likesCount,
+     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as commentsCount
      FROM posts p
      JOIN users u ON p.user_id = u.id
      ORDER BY p.created_at DESC
