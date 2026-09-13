@@ -93,14 +93,17 @@ async function getUserByUsername(username) {
 
 async function searchUsers(query) {
   const [rows] = await db.query(
-    `SELECT * FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20`,
+    `SELECT id, username, full_name AS name, profileImage AS profile_image
+     FROM users
+     WHERE username LIKE ? OR full_name LIKE ?
+     LIMIT 20`,
     [`%${query}%`, `%${query}%`],
   );
   return rows.map((user) => ({
     id: user.id,
     username: user.username,
-    name: user.full_name || user.name || "",
-    profileImage: user.profile_image || user.profileImage || "",
+    name: user.name || "",
+    profileImage: user.profile_image || "",
   }));
 }
 
