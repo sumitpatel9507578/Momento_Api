@@ -35,13 +35,11 @@ async function getUserReels(req, res) {
     });
   } catch (error) {
     console.error("Get user reels error:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch user reels",
-        data: [],
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user reels",
+      data: [],
+    });
   }
 }
 
@@ -58,7 +56,7 @@ async function createReel(req, res) {
 
     if (uploadedFile) {
       console.log("[REEL] Uploaded file field:", uploadedFile.fieldname);
-      videoUrl = `/uploads/${uploadedFile.filename}`;
+      videoUrl = uploadedFile.path;
     }
 
     if (!videoUrl) {
@@ -111,7 +109,7 @@ async function createStory(req, res) {
     let mediaUrl = req.body.mediaUrl;
 
     if (req.file) {
-      mediaUrl = `/uploads/${req.file.filename}`;
+      mediaUrl = req.file.path;
     }
 
     if (!mediaUrl) {

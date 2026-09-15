@@ -17,7 +17,9 @@ async function getFeed(req, res) {
     });
   } catch (error) {
     console.error("Get feed error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch feed", data: [] });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch feed", data: [] });
   }
 }
 
@@ -33,7 +35,13 @@ async function getUserPosts(req, res) {
     });
   } catch (error) {
     console.error("Get user posts error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch user posts", data: [] });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch user posts",
+        data: [],
+      });
   }
 }
 
@@ -44,14 +52,21 @@ async function createPost(req, res) {
     let mediaUrl = req.body.mediaUrl;
 
     if (req.file) {
-      mediaUrl = `/uploads/${req.file.filename}`;
+      mediaUrl = req.file.path;
     }
 
     if (!caption && !mediaUrl) {
-      return res.status(400).json({ success: false, message: "Caption or media are required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Caption or media are required" });
     }
 
-    const post = await postModel.createPost(req.user.id, caption, mediaUrl, mediaType || 'image');
+    const post = await postModel.createPost(
+      req.user.id,
+      caption,
+      mediaUrl,
+      mediaType || "image",
+    );
 
     return res.status(201).json({
       success: true,
@@ -60,7 +75,12 @@ async function createPost(req, res) {
     });
   } catch (error) {
     console.error("Create post error:", error);
-    return res.status(500).json({ success: false, message: `Failed to create post: ${error.message}` });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: `Failed to create post: ${error.message}`,
+      });
   }
 }
 
@@ -75,11 +95,15 @@ async function likePost(req, res) {
 
     if (existingLike) {
       await postModel.deleteLike(req.user.id, pId, rId);
-      return res.status(200).json({ success: true, message: "Unliked", isLiked: false });
+      return res
+        .status(200)
+        .json({ success: true, message: "Unliked", isLiked: false });
     }
 
     await postModel.createLike(req.user.id, pId, rId);
-    return res.status(201).json({ success: true, message: "Liked", isLiked: true });
+    return res
+      .status(201)
+      .json({ success: true, message: "Liked", isLiked: true });
   } catch (error) {
     console.error("Like error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -92,7 +116,9 @@ async function createComment(req, res) {
     const { comment } = req.body;
 
     if (!comment) {
-      return res.status(400).json({ success: false, message: "Comment is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Comment is required" });
     }
 
     await postModel.createComment(req.user.id, postId, comment, reelId);
@@ -118,7 +144,9 @@ async function getComments(req, res) {
     } else if (reelId) {
       comments = await postModel.getCommentsByReelId(reelId);
     } else {
-      return res.status(400).json({ success: false, message: "ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "ID is required" });
     }
 
     return res.status(200).json({
@@ -128,7 +156,9 @@ async function getComments(req, res) {
     });
   } catch (error) {
     console.error("Get comments error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch comments", data: [] });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch comments", data: [] });
   }
 }
 

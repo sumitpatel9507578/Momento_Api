@@ -15,12 +15,10 @@ async function register(req, res) {
       req.body.fullName || req.body.full_name || req.body.name || "";
 
     if (!username || !email || !password) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Required fields missing (username, email, password)",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Required fields missing (username, email, password)",
+      });
     }
 
     const existingUser = await userModel.getUserByEmail(email);
@@ -38,7 +36,7 @@ async function register(req, res) {
       req.body.profileimage ||
       null;
     if (req.file) {
-      profileImage = `/uploads/${req.file.filename}`;
+      profileImage = req.file.path;
       console.log("[AUTH] Profile image uploaded:", profileImage);
     }
 

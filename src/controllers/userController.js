@@ -47,7 +47,7 @@ async function updateProfile(req, res) {
     if (fullName) updates.full_name = fullName;
     if (bio) updates.bio = bio;
     if (req.file) {
-      updates.profile_image = `/uploads/${req.file.filename}`;
+      updates.profile_image = req.file.path;
     }
 
     if (Object.keys(updates).length === 0) {
