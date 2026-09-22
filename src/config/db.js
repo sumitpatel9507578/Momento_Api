@@ -14,7 +14,7 @@ const db = mysql.createPool({
   queueLimit: 0,
   connectTimeout: 20000, // 20 seconds for slow remote connections
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0
+  keepAliveInitialDelay: 0,
 });
 
 module.exports = db;

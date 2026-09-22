@@ -1,6 +1,5 @@
 const jwt = require("jsonwebtoken");
 
-// Verify the Bearer JWT and attach its user data to the request
 function authMiddleware(req, res, next) {
   const authorization = req.headers.authorization;
   const token =
@@ -9,7 +8,9 @@ function authMiddleware(req, res, next) {
       : null;
 
   console.log(`[AUTH] Incoming request: ${req.method} ${req.url}`);
-  console.log(`[AUTH] Authorization Header: ${authorization ? "Present" : "Missing"}`);
+  console.log(
+    `[AUTH] Authorization Header: ${authorization ? "Present" : "Missing"}`,
+  );
   if (token) {
     console.log(`[AUTH] Token prefix: ${token.substring(0, 10)}...`);
   }
@@ -34,7 +35,9 @@ function authMiddleware(req, res, next) {
 
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-    console.log(`[AUTH] Verification success: User ${req.user.username} (ID: ${req.user.id})`);
+    console.log(
+      `[AUTH] Verification success: User ${req.user.username} (ID: ${req.user.id})`,
+    );
     return next();
   } catch (error) {
     console.log(`[AUTH] Verification failed: ${error.message}`);
