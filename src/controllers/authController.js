@@ -9,6 +9,7 @@ async function register(req, res) {
   );
   try {
     const { username, email, password } = req.body;
+    const deviceToken = req.body.deviceToken || req.body.device_token || null;
 
     // Support all possible name field formats from client (fullName, full_name, name)
     const fullName =
@@ -46,6 +47,7 @@ async function register(req, res) {
       hashedPassword,
       fullName,
       profileImage,
+      deviceToken,
     );
     console.log("[AUTH] User created in DB with ID:", id);
 
@@ -55,6 +57,18 @@ async function register(req, res) {
       process.env.JWT_SECRET || "momento_fallback_secret",
       { expiresIn: "7d" },
     );
+    const refreshToken = jwt.sign(
+      { id: user.id, username: user.username },
+      process.env.JWT_REFRESH_SECRET ||
+        process.env.JWT_SECRET ||
+        "momento_fallback_secret",
+      { expiresIn: "30d" },
+    );
+
+    await userModel.updateUser(id, {
+      access_token: token,
+      refresh_token: refreshToken,
+    });
 
     return res.status(201).json({
       success: true,

@@ -22,6 +22,7 @@ async function createUser(
   password,
   name = null,
   profileImage = null,
+  deviceToken = null,
 ) {
   const cols = await getTableInfo();
 
@@ -47,6 +48,11 @@ async function createUser(
   if (imgCol) {
     query += `, ${imgCol}`;
     params.push(profileImage);
+  }
+
+  if (cols.includes("device_token")) {
+    query += ", device_token";
+    params.push(deviceToken);
   }
 
   query += `) VALUES (?, ?, ?, ?, ?)`.replace(
@@ -80,6 +86,8 @@ async function getUserById(id) {
     name: user.full_name || user.name || "",
     bio: user.bio || "",
     profileImage: user.profile_image || user.profileImage || "",
+    role: user.role || "user",
+    profileCompleted: Boolean(user.profile_completed),
     createdAt: user.created_at || user.createdAt || null,
   };
 }
