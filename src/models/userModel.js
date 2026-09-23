@@ -142,11 +142,46 @@ async function updateUser(id, updates) {
   return result.affectedRows > 0;
 }
 
+async function saveAuthTokens(id, accessToken, refreshToken, deviceToken) {
+  const cols = await getTableInfo();
+  const requiredColumns = ["access_token", "refresh_token"];
+  const missingColumns = requiredColumns.filter(
+    (column) => !cols.includes(column),
+  );
+
+  if (missingColumns.length > 0) {
+    throw new Error(
+      `Missing users table columns: ${missingColumns.join(", ")}. Run the user auth migration.`,
+    );
+  }
+
+  const fields = ["access_token = ?", "refresh_token = ?"];
+  const values = [accessToken, refreshToken];
+
+  if (deviceToken !== undefined && cols.includes("device_token")) {
+    fields.push("device_token = ?");
+    values.push(deviceToken);
+  }
+
+  values.push(id);
+  const [result] = await db.query(
+    `UPDATE users SET ${fields.join(", ")} WHERE id = ?`,
+    values,
+  );
+
+  if (result.affectedRows === 0) {
+    throw new Error(`Could not save auth tokens for user ${id}.`);
+  }
+
+  return true;
+}
+
 module.exports = {
   createUser,
   getUserByEmail,
   getUserById,
   getUserByUsername,
   searchUsers,
+  saveAuthTokens,
   updateUser,
 };

@@ -126,16 +126,7 @@ async function login(req, res) {
       { expiresIn: "30d" },
     );
 
-    const tokenUpdates = {
-      access_token: token,
-      refresh_token: refreshToken,
-    };
-    if (deviceToken !== undefined) tokenUpdates.device_token = deviceToken;
-
-    const tokensSaved = await userModel.updateUser(user.id, tokenUpdates);
-    if (!tokensSaved) {
-      console.warn("[AUTH] Login tokens were not saved for user:", user.id);
-    }
+    await userModel.saveAuthTokens(user.id, token, refreshToken, deviceToken);
 
     return res.status(200).json({
       success: true,
