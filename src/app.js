@@ -14,7 +14,8 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
@@ -40,6 +41,25 @@ app.get("/", (req, res) => {
     success: true,
     message: "Momento backend is running",
   });
+});
+
+app.use((error, req, res, next) => {
+  if (error.code === "LIMIT_FILE_SIZE") {
+    return res.status(413).json({
+      success: false,
+      message: "Uploaded file is too large. Maximum size is 100MB.",
+    });
+  }
+
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({
+      success: false,
+      message:
+        "Request payload is too large. Send reels as multipart/form-data.",
+    });
+  }
+
+  next(error);
 });
 
 module.exports = app;

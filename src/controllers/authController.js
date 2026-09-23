@@ -98,6 +98,7 @@ async function register(req, res) {
 async function login(req, res) {
   try {
     const { email, password } = req.body;
+    const deviceToken = req.body.deviceToken || req.body.device_token;
     const userInDb = await userModel.getUserByEmail(email);
 
     if (!userInDb)
@@ -117,11 +118,29 @@ async function login(req, res) {
       process.env.JWT_SECRET || "momento_fallback_secret",
       { expiresIn: "7d" },
     );
+    const refreshToken = jwt.sign(
+      { id: user.id, username: user.username },
+      process.env.JWT_REFRESH_SECRET ||
+        process.env.JWT_SECRET ||
+        "momento_fallback_secret",
+      { expiresIn: "30d" },
+    );
+
+    const tokenUpdates = {
+      access_token: token,
+      refresh_token: refreshToken,
+    };
+    if (deviceToken !== undefined) tokenUpdates.device_token = deviceToken;
+
+    const tokensSaved = await userModel.updateUser(user.id, tokenUpdates);
+    if (!tokensSaved) {
+      console.warn("[AUTH] Login tokens were not saved for user:", user.id);
+    }
 
     return res.status(200).json({
       success: true,
       message: "Login successful",
-      data: { token, user: user },
+      data: { token, refreshToken, user: user },
     });
   } catch (error) {
     console.error("[AUTH] Login Crash:", error);

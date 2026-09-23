@@ -79,9 +79,11 @@ async function createReel(req, res) {
     });
   } catch (error) {
     console.error("Create reel error:", error);
-    return res
-      .status(500)
-      .json({ success: false, message: "Failed to create reel" });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create reel",
+      error: process.env.NODE_ENV === "production" ? undefined : error.message,
+    });
   }
 }
 
