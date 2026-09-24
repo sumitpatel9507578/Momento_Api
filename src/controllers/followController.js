@@ -63,6 +63,62 @@ async function followUser(req, res) {
   }
 }
 
+async function getFollowers(req, res) {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid userId is required",
+        data: [],
+      });
+    }
+
+    const followers = await followModel.getFollowers(userId);
+    return res.status(200).json({
+      success: true,
+      message: "Followers fetched successfully",
+      data: followers,
+    });
+  } catch (error) {
+    console.error("Get followers error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch followers",
+      data: [],
+    });
+  }
+}
+
+async function getFollowing(req, res) {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid userId is required",
+        data: [],
+      });
+    }
+
+    const following = await followModel.getFollowing(userId);
+    return res.status(200).json({
+      success: true,
+      message: "Following fetched successfully",
+      data: following,
+    });
+  } catch (error) {
+    console.error("Get following error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch following",
+      data: [],
+    });
+  }
+}
+
 module.exports = {
   followUser,
+  getFollowers,
+  getFollowing,
 };
