@@ -35,13 +35,11 @@ async function getUserPosts(req, res) {
     });
   } catch (error) {
     console.error("Get user posts error:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch user posts",
-        data: [],
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user posts",
+      data: [],
+    });
   }
 }
 
@@ -75,12 +73,10 @@ async function createPost(req, res) {
     });
   } catch (error) {
     console.error("Create post error:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: `Failed to create post: ${error.message}`,
-      });
+    return res.status(500).json({
+      success: false,
+      message: `Failed to create post: ${error.message}`,
+    });
   }
 }
 
@@ -88,8 +84,15 @@ async function createPost(req, res) {
 async function likePost(req, res) {
   try {
     const { postId, reelId } = req.params;
-    const pId = postId || req.query.postId;
-    const rId = reelId || req.query.reelId;
+    const pId = postId || req.query.postId || req.body.postId;
+    const rId = reelId || req.query.reelId || req.body.reelId;
+
+    if (!pId && !rId) {
+      return res.status(400).json({
+        success: false,
+        message: "postId or reelId is required",
+      });
+    }
 
     const existingLike = await postModel.getLike(req.user.id, pId, rId);
 

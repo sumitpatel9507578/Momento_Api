@@ -7,6 +7,7 @@ const upload = require("../middleware/uploadMiddleware");
 router.get("/", authMiddleware, contentController.getReels);
 router.get("/user/:userId", authMiddleware, contentController.getUserReels);
 router.get("/:reelId/comments", authMiddleware, postController.getComments);
+router.post("/:reelId/like", authMiddleware, postController.likePost);
 router.post(
   "/",
   authMiddleware,
