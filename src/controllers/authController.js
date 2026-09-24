@@ -65,15 +65,12 @@ async function register(req, res) {
       { expiresIn: "30d" },
     );
 
-    await userModel.updateUser(id, {
-      access_token: token,
-      refresh_token: refreshToken,
-    });
+    await userModel.saveAuthTokens(id, token, refreshToken, deviceToken);
 
     return res.status(201).json({
       success: true,
       message: "User registered successfully",
-      data: { token, user: user },
+      data: { token, refreshToken, user: user },
     });
   } catch (error) {
     console.error("[AUTH] Register Crash:", error);

@@ -38,31 +38,25 @@ async function createUser(
       ? "profileImage"
       : null;
 
-  let query = `INSERT INTO users (username, email, password`;
+  const insertColumns = ["username", "email", "password"];
   const params = [username, email, password];
 
   if (nameCol) {
-    query += `, ${nameCol}`;
+    insertColumns.push(nameCol);
     params.push(name);
   }
   if (imgCol) {
-    query += `, ${imgCol}`;
+    insertColumns.push(imgCol);
     params.push(profileImage);
   }
 
   if (cols.includes("device_token")) {
-    query += ", device_token";
+    insertColumns.push("device_token");
     params.push(deviceToken);
   }
 
-  query += `) VALUES (?, ?, ?, ?, ?)`.replace(
-    ", ?, ?)",
-    nameCol && imgCol ? ", ?, ?)" : nameCol || imgCol ? ", ?)" : ")",
-  );
-
-  // Fix the placeholder count dynamically
   const placeholders = params.map(() => "?").join(", ");
-  const finalQuery = `INSERT INTO users (username, email, password${nameCol ? ", " + nameCol : ""}${imgCol ? ", " + imgCol : ""}) VALUES (${placeholders})`;
+  const finalQuery = `INSERT INTO users (${insertColumns.join(", ")}) VALUES (${placeholders})`;
 
   const [result] = await db.query(finalQuery, params);
   return result.insertId;
