@@ -44,10 +44,18 @@ async function updateProfile(req, res) {
     const { fullName, bio } = req.body;
     const updates = {};
 
-    if (fullName) updates.full_name = fullName;
+    if (fullName) updates.fullName = fullName;
     if (bio) updates.bio = bio;
-    if (req.file) {
-      updates.profile_image = req.file.path;
+    const uploadedFile =
+      req.file ||
+      req.files?.profileImage?.[0] ||
+      req.files?.profile_image?.[0] ||
+      req.files?.profileimage?.[0] ||
+      req.files?.image?.[0] ||
+      req.files?.file?.[0] ||
+      req.files?.media?.[0];
+    if (uploadedFile) {
+      updates.profileImage = uploadedFile.path;
     }
 
     if (Object.keys(updates).length === 0) {
