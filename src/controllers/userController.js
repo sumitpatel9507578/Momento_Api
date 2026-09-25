@@ -1,5 +1,43 @@
 const userModel = require("../models/userModel");
 
+// Get a user's public profile
+async function getProfile(req, res) {
+  try {
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID",
+        data: null,
+      });
+    }
+
+    const user = await userModel.getUserById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+        data: null,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User profile fetched successfully",
+      data: user,
+    });
+  } catch (error) {
+    console.error("Get profile error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user profile",
+      data: null,
+    });
+  }
+}
+
 // Get the currently authenticated user's profile
 async function getMe(req, res) {
   try {
@@ -106,6 +144,7 @@ async function searchUsers(req, res) {
 }
 
 module.exports = {
+  getProfile,
   getMe,
   updateProfile,
   searchUsers,

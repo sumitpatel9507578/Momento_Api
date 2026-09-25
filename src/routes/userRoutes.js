@@ -6,6 +6,8 @@ const upload = require("../middleware/uploadMiddleware");
 
 router.get("/me", authMiddleware, userController.getMe);
 router.get("/search", authMiddleware, userController.searchUsers);
+router.get("/:userId", authMiddleware, userController.getProfile);
+router.get("/profile/:userId", authMiddleware, userController.getProfile);
 router.get("/:userId/followers", authMiddleware, followController.getFollowers);
 router.get("/:userId/following", authMiddleware, followController.getFollowing);
 router.put(
