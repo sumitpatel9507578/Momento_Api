@@ -10,6 +10,7 @@ const reelRoutes = require("./routes/reelRoutes");
 const storyRoutes = require("./routes/storyRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const savedItemRoutes = require("./routes/savedItemRoutes");
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use("/api/reels", reelRoutes);
 app.use("/api/stories", storyRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/saved-items", savedItemRoutes);
 
 // Provide a lightweight endpoint for Render health checks
 app.get("/health", (req, res) => {

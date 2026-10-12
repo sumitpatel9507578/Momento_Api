@@ -6,8 +6,10 @@ const upload = require("../middleware/uploadMiddleware");
 
 router.get("/", authMiddleware, contentController.getReels);
 router.get("/user/:userId", authMiddleware, contentController.getUserReels);
+router.get("/:reelId", authMiddleware, contentController.getReel);
 router.get("/:reelId/comments", authMiddleware, postController.getComments);
 router.post("/:reelId/like", authMiddleware, postController.likePost);
+router.post("/like/:reelId", authMiddleware, postController.likePost);
 router.post(
   "/",
   authMiddleware,
@@ -19,7 +21,5 @@ router.post(
   contentController.createReel,
 );
 router.post("/:reelId/comments", authMiddleware, postController.createComment);
-
-module.exports = router;
 
 module.exports = router;

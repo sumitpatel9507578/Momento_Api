@@ -23,6 +23,38 @@ async function getReels(req, res) {
   }
 }
 
+async function getReel(req, res) {
+  const reelId = req.params.reelId;
+  if (!/^[1-9]\d*$/.test(reelId)) {
+    return res.status(400).json({
+      success: false,
+      message: "A valid reel ID is required",
+    });
+  }
+
+  try {
+    const reel = await postModel.getReelById(reelId);
+    if (!reel) {
+      return res.status(404).json({
+        success: false,
+        message: "Reel not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Reel fetched successfully",
+      data: reel,
+    });
+  } catch (error) {
+    console.error("Get reel error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch reel",
+    });
+  }
+}
+
 // Get user reels
 async function getUserReels(req, res) {
   try {
@@ -218,6 +250,7 @@ async function createStory(req, res) {
 
 module.exports = {
   getReels,
+  getReel,
   getUserReels,
   createReel,
   getStories,

@@ -223,6 +223,25 @@ async function getReels(limit = 10, offset = 0) {
   }));
 }
 
+async function getReelById(reelId) {
+  const [rows] = await db.query(
+    `SELECT r.*, u.username, u.full_name AS name,
+            u.profileImage AS profile_image
+     FROM reels r
+     JOIN users u ON u.id = r.user_id
+     WHERE r.id = ?`,
+    [reelId],
+  );
+  const reel = rows[0];
+  if (!reel) return null;
+  return {
+    ...reel,
+    userId: reel.user_id,
+    videoUrl: reel.video_url,
+    profileImage: reel.profile_image || "",
+  };
+}
+
 async function getReelsByUserId(userId) {
   const [rows] = await db.query(
     `SELECT r.*, u.username, u.full_name AS name, u.profileImage AS profile_image
@@ -308,7 +327,7 @@ async function getActiveStories() {
   }));
 }
 
-const MESSAGE_TYPES = ["text", "image", "video", "audio", "file"];
+const MESSAGE_TYPES = ["text", "image", "video", "audio", "file", "reel"];
 
 async function requireMessageColumns() {
   const columns = await getTableCols("messages");
@@ -330,6 +349,7 @@ async function requireMessageColumns() {
       `Messages table is missing required columns: ${missingColumns.join(", ")}`,
     );
   }
+  return columns;
 }
 
 function mapMessage(row) {
@@ -340,33 +360,93 @@ function mapMessage(row) {
     message: row.message,
     messageType: row.messageType ?? row.message_type,
     mediaUrl: row.mediaUrl ?? row.media_url ?? null,
+    reelId: row.reelId ?? row.reel_id ?? null,
+    reelVideoUrl: row.reelVideoUrl ?? row.reel_video_url ?? null,
+    reelCaption: row.reelCaption ?? row.reel_caption ?? null,
+    reelOwnerId: row.reelOwnerId ?? row.reel_owner_id ?? null,
+    reelOwnerUsername:
+      row.reelOwnerUsername ?? row.reel_owner_username ?? null,
     isRead: row.isRead ?? row.is_read,
     createdAt: row.createdAt ?? row.created_at,
   };
 }
 
 // Persist a message using the authenticated sender and the verified messages schema.
-async function createMessage(senderId, receiverId, message, messageType, mediaUrl) {
+async function createMessage(
+  senderId,
+  receiverId,
+  message,
+  messageType,
+  mediaUrl,
+  reelId = null,
+) {
   if (!MESSAGE_TYPES.includes(messageType)) {
     const error = new Error("Unsupported message type");
     error.code = "INVALID_MESSAGE_TYPE";
     throw error;
   }
 
-  await requireMessageColumns();
+  const columns = await requireMessageColumns();
+  if (messageType === "reel" && !columns.includes("reel_id")) {
+    const error = new Error(
+      "Shared reel messages require the approved messages.reel_id migration",
+    );
+    error.code = "REEL_MESSAGE_MIGRATION_REQUIRED";
+    throw error;
+  }
+  if ((messageType === "reel") !== (reelId !== null && reelId !== undefined)) {
+    const error = new Error("A reelId is required only for reel messages");
+    error.code = "INVALID_REEL_MESSAGE";
+    throw error;
+  }
+  if (messageType === "reel") {
+    const [reels] = await db.query(`SELECT id FROM reels WHERE id = ?`, [
+      reelId,
+    ]);
+    if (reels.length === 0) {
+      const error = new Error("Reel not found");
+      error.code = "SHARED_REEL_NOT_FOUND";
+      throw error;
+    }
+  }
+
+  const insertColumns = [
+    "sender_id",
+    "receiver_id",
+    "message",
+    "message_type",
+    "media_url",
+  ];
+  const insertValues = [senderId, receiverId, message, messageType, mediaUrl || null];
+  if (columns.includes("reel_id")) {
+    insertColumns.push("reel_id");
+    insertValues.push(reelId || null);
+  }
   const [result] = await db.query(
-    `INSERT INTO messages
-      (sender_id, receiver_id, message, message_type, media_url)
-     VALUES (?, ?, ?, ?, ?)`,
-    [senderId, receiverId, message, messageType, mediaUrl || null],
+    `INSERT INTO messages (${insertColumns.join(", ")})
+     VALUES (${insertValues.map(() => "?").join(", ")})`,
+    insertValues,
   );
 
+  const reelFields = columns.includes("reel_id")
+    ? `m.reel_id AS reelId, r.video_url AS reelVideoUrl,
+       r.caption AS reelCaption, r.user_id AS reelOwnerId,
+       owner.username AS reelOwnerUsername`
+    : `NULL AS reelId, NULL AS reelVideoUrl,
+       NULL AS reelCaption, NULL AS reelOwnerId,
+       NULL AS reelOwnerUsername`;
+  const reelJoins = columns.includes("reel_id")
+    ? `LEFT JOIN reels r ON r.id = m.reel_id
+       LEFT JOIN users owner ON owner.id = r.user_id`
+    : "";
   const [rows] = await db.query(
-    `SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
-            message_type AS messageType, media_url AS mediaUrl,
-            is_read AS isRead, created_at AS createdAt
-     FROM messages
-     WHERE id = ?`,
+    `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
+            m.message, m.message_type AS messageType,
+            m.media_url AS mediaUrl, ${reelFields},
+            m.is_read AS isRead, m.created_at AS createdAt
+     FROM messages m
+     ${reelJoins}
+     WHERE m.id = ?`,
     [result.insertId],
   );
   if (!rows[0]) {
@@ -377,15 +457,28 @@ async function createMessage(senderId, receiverId, message, messageType, mediaUr
 
 // Fetch both directions of a conversation from oldest to newest.
 async function getMessages(userId, otherUserId) {
-  await requireMessageColumns();
+  const columns = await requireMessageColumns();
+  const reelFields = columns.includes("reel_id")
+    ? `m.reel_id AS reelId, r.video_url AS reelVideoUrl,
+       r.caption AS reelCaption, r.user_id AS reelOwnerId,
+       owner.username AS reelOwnerUsername`
+    : `NULL AS reelId, NULL AS reelVideoUrl,
+       NULL AS reelCaption, NULL AS reelOwnerId,
+       NULL AS reelOwnerUsername`;
+  const reelJoins = columns.includes("reel_id")
+    ? `LEFT JOIN reels r ON r.id = m.reel_id
+       LEFT JOIN users owner ON owner.id = r.user_id`
+    : "";
   const [rows] = await db.query(
-    `SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
-            message_type AS messageType, media_url AS mediaUrl,
-            is_read AS isRead, created_at AS createdAt
-     FROM messages
-     WHERE (sender_id = ? AND receiver_id = ?)
-        OR (sender_id = ? AND receiver_id = ?)
-     ORDER BY created_at ASC, id ASC`,
+    `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
+            m.message, m.message_type AS messageType,
+            m.media_url AS mediaUrl, ${reelFields},
+            m.is_read AS isRead, m.created_at AS createdAt
+     FROM messages m
+     ${reelJoins}
+     WHERE (m.sender_id = ? AND m.receiver_id = ?)
+        OR (m.sender_id = ? AND m.receiver_id = ?)
+     ORDER BY m.created_at ASC, m.id ASC`,
     [userId, otherUserId, otherUserId, userId],
   );
   return rows.map(mapMessage);
@@ -460,6 +553,7 @@ module.exports = {
   getCommentsByReelId,
   createReel,
   getReels,
+  getReelById,
   getReelsByUserId,
   createStory,
   getActiveStories,
