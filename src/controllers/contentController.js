@@ -1,4 +1,5 @@
 const postModel = require("../models/postModel");
+const userModel = require("../models/userModel");
 
 // Get reels feed
 async function getReels(req, res) {
@@ -109,25 +110,95 @@ async function createStory(req, res) {
   try {
     const { mediaType, caption, expiresAt } = req.body;
     let mediaUrl = req.body.mediaUrl;
+    const uploadedFile = req.file || req.files?.story?.[0] || req.files?.media?.[0];
+    let resolvedMediaType = mediaType || "image";
 
-    if (req.file) {
-      mediaUrl = req.file.path;
+    if (uploadedFile) {
+      mediaUrl = uploadedFile.path;
+      const uploadedMediaType = uploadedFile.mimetype?.startsWith("video/")
+        ? "video"
+        : uploadedFile.mimetype?.startsWith("image/")
+          ? "image"
+          : null;
+      if (!uploadedMediaType) {
+        return res.status(400).json({
+          success: false,
+          message: "Only image and video story media are supported",
+        });
+      }
+      if (mediaType && mediaType !== uploadedMediaType) {
+        return res.status(400).json({
+          success: false,
+          message: "mediaType does not match the uploaded file",
+        });
+      }
+      resolvedMediaType = uploadedMediaType;
     }
 
-    if (!mediaUrl) {
-      return res
-        .status(400)
-        .json({ success: false, message: "media file is required" });
+    if (typeof mediaUrl !== "string" || mediaUrl.length > 2000) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid mediaUrl or uploaded story file is required",
+      });
+    }
+    try {
+      const parsedMediaUrl = new URL(mediaUrl);
+      if (!["http:", "https:"].includes(parsedMediaUrl.protocol)) {
+        throw new Error("Unsupported media URL protocol");
+      }
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: "mediaUrl must be a valid HTTP or HTTPS URL",
+      });
+    }
+
+    if (!["image", "video"].includes(resolvedMediaType)) {
+      return res.status(400).json({
+        success: false,
+        message: "mediaType must be image or video",
+      });
+    }
+
+    if (
+      caption !== undefined &&
+      caption !== null &&
+      (typeof caption !== "string" || caption.length > 500)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "caption must be a string no longer than 500 characters",
+      });
     }
 
     const expiration = expiresAt
       ? new Date(expiresAt)
       : new Date(Date.now() + 24 * 60 * 60 * 1000);
+    if (Number.isNaN(expiration.getTime()) || expiration <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "expiresAt must be a valid future date",
+      });
+    }
+    const userId = Number(req.user.id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authenticated user",
+      });
+    }
+    const user = await userModel.getUserById(userId);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authenticated user not found",
+      });
+    }
 
     const storyId = await postModel.createStory(
-      req.user.id,
+      userId,
       mediaUrl,
-      mediaType || "image",
+      resolvedMediaType,
       caption,
       expiration,
     );
