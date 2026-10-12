@@ -83,33 +83,79 @@ async function createPost(req, res) {
 // --- Social ---
 async function likePost(req, res) {
   try {
-    const { postId, reelId } = req.params;
-    const pId = postId || req.query.postId || req.body.postId;
-    const rId = reelId || req.query.reelId || req.body.reelId;
+    const pId = req.params.postId || req.query.postId || req.body.postId;
+    const rId = req.params.reelId || req.query.reelId || req.body.reelId;
+    const hasPostId = pId !== undefined && pId !== null && pId !== "";
+    const hasReelId = rId !== undefined && rId !== null && rId !== "";
 
-    if (!pId && !rId) {
+    if (hasPostId === hasReelId) {
       return res.status(400).json({
         success: false,
-        message: "postId or reelId is required",
+        message: "Provide exactly one postId or reelId",
+        isLiked: false,
       });
     }
 
-    const existingLike = await postModel.getLike(req.user.id, pId, rId);
-
-    if (existingLike) {
-      await postModel.deleteLike(req.user.id, pId, rId);
-      return res
-        .status(200)
-        .json({ success: true, message: "Unliked", isLiked: false });
+    const contentId = Number(hasPostId ? pId : rId);
+    if (!Number.isSafeInteger(contentId) || contentId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Content ID must be a positive integer",
+        isLiked: false,
+      });
     }
 
-    await postModel.createLike(req.user.id, pId, rId);
-    return res
-      .status(201)
-      .json({ success: true, message: "Liked", isLiked: true });
+    const postTargetId = hasPostId ? contentId : null;
+    const reelTargetId = hasReelId ? contentId : null;
+    const existingLike = await postModel.getLike(
+      req.user.id,
+      postTargetId,
+      reelTargetId,
+    );
+
+    if (existingLike) {
+      await postModel.deleteLike(req.user.id, postTargetId, reelTargetId);
+      return res.status(200).json({
+        success: true,
+        message: "Unliked",
+        isLiked: false,
+      });
+    }
+
+    await postModel.createLike(req.user.id, postTargetId, reelTargetId);
+    return res.status(201).json({
+      success: true,
+      message: "Liked",
+      isLiked: true,
+    });
   } catch (error) {
     console.error("Like error:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
+    if (error.code === "INVALID_LIKE_TARGET") {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        isLiked: false,
+      });
+    }
+    if (error.code === "LIKE_TARGET_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+        isLiked: false,
+      });
+    }
+    if (error.code === "REEL_LIKES_MIGRATION_REQUIRED") {
+      return res.status(503).json({
+        success: false,
+        message: "Reel likes require a database migration before they can be used",
+        isLiked: false,
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update like",
+      isLiked: false,
+    });
   }
 }
 

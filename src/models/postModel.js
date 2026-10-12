@@ -1,13 +1,9 @@
 const db = require("../config/db");
 
-// Helper to get columns from a table
+// Read table metadata so SQL only uses columns that the database actually has.
 async function getTableCols(tableName) {
-  try {
-    const [columns] = await db.query(`SHOW COLUMNS FROM ${tableName}`);
-    return columns.map((c) => c.Field);
-  } catch (err) {
-    return [];
-  }
+  const [columns] = await db.query(`SHOW COLUMNS FROM ${tableName}`);
+  return columns.map((column) => column.Field);
 }
 
 async function createPost(userId, caption, mediaUrl, mediaType) {
@@ -78,64 +74,87 @@ function _mapPost(p) {
 }
 
 // --- Social ---
-async function getLike(userId, postId, reelId = null) {
-  const cols = await getTableCols("likes");
-  const userIdCol = cols.includes("userId") ? "userId" : "user_id";
-  let query = `SELECT id FROM likes WHERE ${userIdCol} = ?`;
-  let params = [userId];
-  if (postId) {
-    const postIdCol = cols.includes("postId") ? "postId" : "post_id";
-    query += ` AND ${postIdCol} = ?`;
-    params.push(postId);
-  } else if (reelId) {
-    const reelIdCol = cols.includes("reelId") ? "reelId" : "reel_id";
-    query += ` AND ${reelIdCol} = ?`;
-    params.push(reelId);
+function getLikeTarget(postId, reelId = null) {
+  const hasPostId = postId !== undefined && postId !== null && postId !== "";
+  const hasReelId = reelId !== undefined && reelId !== null && reelId !== "";
+
+  if (hasPostId === hasReelId) {
+    const error = new Error("Exactly one postId or reelId is required");
+    error.code = "INVALID_LIKE_TARGET";
+    throw error;
   }
-  const [rows] = await db.query(query, params);
+
+  return hasPostId
+    ? { table: "posts", column: "post_id", id: postId }
+    : { table: "reels", column: "reel_id", id: reelId };
+}
+
+async function ensureLikeTargetExists(target) {
+  const [rows] = await db.query(
+    `SELECT id FROM ${target.table} WHERE id = ?`,
+    [target.id],
+  );
+  if (rows.length === 0) {
+    const error = new Error(
+      `${target.table === "posts" ? "Post" : "Reel"} not found`,
+    );
+    error.code = "LIKE_TARGET_NOT_FOUND";
+    throw error;
+  }
+}
+
+async function getLike(userId, postId, reelId = null) {
+  const target = getLikeTarget(postId, reelId);
+  const cols = await getTableCols("likes");
+  if (!cols.includes(target.column)) {
+    const error = new Error(
+      "The likes table does not support reel likes; add the reel_id column and make post_id nullable.",
+    );
+    error.code = "REEL_LIKES_MIGRATION_REQUIRED";
+    throw error;
+  }
+
+  await ensureLikeTargetExists(target);
+  const [rows] = await db.query(
+    `SELECT id FROM likes WHERE user_id = ? AND ${target.column} = ?`,
+    [userId, target.id],
+  );
   return rows[0];
 }
 
 async function createLike(userId, postId, reelId = null) {
+  const target = getLikeTarget(postId, reelId);
   const cols = await getTableCols("likes");
-  const userIdCol = cols.includes("userId") ? "userId" : "user_id";
-  const valueColumns = [userIdCol];
-  const values = [userId];
-
-  if (postId) {
-    valueColumns.push(cols.includes("postId") ? "postId" : "post_id");
-    values.push(postId);
-  } else if (reelId) {
-    valueColumns.push(cols.includes("reelId") ? "reelId" : "reel_id");
-    values.push(reelId);
+  if (!cols.includes(target.column)) {
+    const error = new Error(
+      "The likes table does not support reel likes; add the reel_id column and make post_id nullable.",
+    );
+    error.code = "REEL_LIKES_MIGRATION_REQUIRED";
+    throw error;
   }
 
+  await ensureLikeTargetExists(target);
   await db.query(
-    `INSERT INTO likes (${valueColumns.join(", ")}) VALUES (${valueColumns.map(() => "?").join(", ")})`,
-    values,
+    `INSERT INTO likes (user_id, ${target.column}) VALUES (?, ?)`,
+    [userId, target.id],
   );
 }
 
 async function deleteLike(userId, postId, reelId = null) {
-  const uIdCol = (await getTableCols("likes")).includes("userId")
-    ? "userId"
-    : "user_id";
-  let query = `DELETE FROM likes WHERE ${uIdCol} = ?`;
-  let params = [userId];
-  if (postId) {
-    const pIdCol = (await getTableCols("likes")).includes("postId")
-      ? "postId"
-      : "post_id";
-    query += ` AND ${pIdCol} = ?`;
-    params.push(postId);
-  } else if (reelId) {
-    const rIdCol = (await getTableCols("likes")).includes("reelId")
-      ? "reelId"
-      : "reel_id";
-    query += ` AND ${rIdCol} = ?`;
-    params.push(reelId);
+  const target = getLikeTarget(postId, reelId);
+  const cols = await getTableCols("likes");
+  if (!cols.includes(target.column)) {
+    const error = new Error(
+      "The likes table does not support reel likes; add the reel_id column and make post_id nullable.",
+    );
+    error.code = "REEL_LIKES_MIGRATION_REQUIRED";
+    throw error;
   }
-  await db.query(query, params);
+
+  await db.query(
+    `DELETE FROM likes WHERE user_id = ? AND ${target.column} = ?`,
+    [userId, target.id],
+  );
 }
 
 async function createComment(userId, postId, comment, reelId = null) {
@@ -224,23 +243,207 @@ async function getReelsByUserId(userId) {
 // --- Stories ---
 async function createStory(userId, mediaUrl, mediaType, caption, expiresAt) {
   const cols = await getTableCols("stories");
-  const uIdCol = cols.includes("userId") ? "userId" : "user_id";
-  const urlCol = cols.includes("mediaUrl") ? "mediaUrl" : "media_url";
-  await db.query(
-    `INSERT INTO stories (${uIdCol}, ${urlCol}, mediaType, caption, expiresAt) VALUES (?, ?, ?, ?, ?)`,
+  const requiredColumns = [
+    "user_id",
+    "media_url",
+    "media_type",
+    "caption",
+    "expires_at",
+  ];
+  const missingColumns = requiredColumns.filter(
+    (column) => !cols.includes(column),
+  );
+  if (missingColumns.length > 0) {
+    throw new Error(
+      `Stories table is missing required columns: ${missingColumns.join(", ")}`,
+    );
+  }
+
+  const [result] = await db.query(
+    `INSERT INTO stories (user_id, media_url, media_type, caption, expires_at) VALUES (?, ?, ?, ?, ?)`,
     [userId, mediaUrl, mediaType, caption, expiresAt],
   );
+  return result.insertId;
 }
 
 async function getActiveStories() {
+  const storyCols = await getTableCols("stories");
+  const requiredColumns = ["user_id", "media_url", "media_type", "expires_at"];
+  const missingColumns = requiredColumns.filter(
+    (column) => !storyCols.includes(column),
+  );
+  if (missingColumns.length > 0) {
+    throw new Error(
+      `Stories table is missing required columns: ${missingColumns.join(", ")}`,
+    );
+  }
+
+  const userCols = await getTableCols("users");
+  if (!userCols.includes("username")) {
+    throw new Error("Users table is missing required column: username");
+  }
+  const profileImageColumn = userCols.includes("profile_image")
+    ? "profile_image"
+    : userCols.includes("profileImage")
+      ? "profileImage"
+      : null;
+  const profileImageSelect = profileImageColumn
+    ? `u.${profileImageColumn}`
+    : "NULL";
+
   const [rows] = await db.query(
-    `SELECT s.*, u.username, u.profileImage, u.profile_image FROM stories s JOIN users u ON (s.userId = u.id OR s.user_id = u.id) WHERE (s.expiresAt > NOW() OR s.expires_at > NOW()) ORDER BY s.id DESC`,
+    `SELECT s.*, u.username, ${profileImageSelect} AS profile_image
+     FROM stories s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.expires_at > NOW()
+     ORDER BY s.created_at DESC, s.id DESC`,
   );
   return rows.map((s) => ({
     ...s,
-    userId: s.userId || s.user_id,
-    mediaUrl: s.mediaUrl || s.media_url,
-    profileImage: s.profileImage || s.profile_image,
+    userId: s.user_id,
+    mediaUrl: s.media_url,
+    mediaType: s.media_type,
+    expiresAt: s.expires_at,
+    profileImage: s.profile_image || "",
+  }));
+}
+
+const MESSAGE_TYPES = ["text", "image", "video", "audio", "file"];
+
+async function requireMessageColumns() {
+  const columns = await getTableCols("messages");
+  const requiredColumns = [
+    "id",
+    "sender_id",
+    "receiver_id",
+    "message",
+    "message_type",
+    "media_url",
+    "is_read",
+    "created_at",
+  ];
+  const missingColumns = requiredColumns.filter(
+    (column) => !columns.includes(column),
+  );
+  if (missingColumns.length > 0) {
+    throw new Error(
+      `Messages table is missing required columns: ${missingColumns.join(", ")}`,
+    );
+  }
+}
+
+function mapMessage(row) {
+  return {
+    id: row.id,
+    senderId: row.senderId ?? row.sender_id,
+    receiverId: row.receiverId ?? row.receiver_id,
+    message: row.message,
+    messageType: row.messageType ?? row.message_type,
+    mediaUrl: row.mediaUrl ?? row.media_url ?? null,
+    isRead: row.isRead ?? row.is_read,
+    createdAt: row.createdAt ?? row.created_at,
+  };
+}
+
+// Persist a message using the authenticated sender and the verified messages schema.
+async function createMessage(senderId, receiverId, message, messageType, mediaUrl) {
+  if (!MESSAGE_TYPES.includes(messageType)) {
+    const error = new Error("Unsupported message type");
+    error.code = "INVALID_MESSAGE_TYPE";
+    throw error;
+  }
+
+  await requireMessageColumns();
+  const [result] = await db.query(
+    `INSERT INTO messages
+      (sender_id, receiver_id, message, message_type, media_url)
+     VALUES (?, ?, ?, ?, ?)`,
+    [senderId, receiverId, message, messageType, mediaUrl || null],
+  );
+
+  const [rows] = await db.query(
+    `SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
+            message_type AS messageType, media_url AS mediaUrl,
+            is_read AS isRead, created_at AS createdAt
+     FROM messages
+     WHERE id = ?`,
+    [result.insertId],
+  );
+  if (!rows[0]) {
+    throw new Error("The saved message could not be read back from the database");
+  }
+  return mapMessage(rows[0]);
+}
+
+// Fetch both directions of a conversation from oldest to newest.
+async function getMessages(userId, otherUserId) {
+  await requireMessageColumns();
+  const [rows] = await db.query(
+    `SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
+            message_type AS messageType, media_url AS mediaUrl,
+            is_read AS isRead, created_at AS createdAt
+     FROM messages
+     WHERE (sender_id = ? AND receiver_id = ?)
+        OR (sender_id = ? AND receiver_id = ?)
+     ORDER BY created_at ASC, id ASC`,
+    [userId, otherUserId, otherUserId, userId],
+  );
+  return rows.map(mapMessage);
+}
+
+// Return the newest message for each conversation, with its other participant.
+async function getConversations(userId) {
+  await requireMessageColumns();
+  const userCols = await getTableCols("users");
+  if (!userCols.includes("username")) {
+    throw new Error("Users table is missing required column: username");
+  }
+  const nameColumn = userCols.includes("full_name")
+    ? "full_name"
+    : userCols.includes("name")
+      ? "name"
+      : null;
+  const profileImageColumn = userCols.includes("profile_image")
+    ? "profile_image"
+    : userCols.includes("profileImage")
+      ? "profileImage"
+      : null;
+  const nameSelect = nameColumn ? `u.${nameColumn}` : "''";
+  const profileImageSelect = profileImageColumn
+    ? `u.${profileImageColumn}`
+    : "NULL";
+
+  const [rows] = await db.query(
+    `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
+            m.message, m.message_type AS messageType,
+            m.media_url AS mediaUrl, m.is_read AS isRead,
+            m.created_at AS createdAt,
+            u.id AS conversationUserId, u.username,
+            ${nameSelect} AS name, ${profileImageSelect} AS profileImage
+     FROM messages m
+     JOIN users u
+       ON u.id = CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
+     WHERE (m.sender_id = ? OR m.receiver_id = ?)
+       AND NOT EXISTS (
+         SELECT 1
+         FROM messages newer
+         WHERE ((newer.sender_id = m.sender_id AND newer.receiver_id = m.receiver_id)
+             OR (newer.sender_id = m.receiver_id AND newer.receiver_id = m.sender_id))
+           AND (COALESCE(newer.created_at, '1000-01-01 00:00:00')
+                  > COALESCE(m.created_at, '1000-01-01 00:00:00')
+             OR (COALESCE(newer.created_at, '1000-01-01 00:00:00')
+                  = COALESCE(m.created_at, '1000-01-01 00:00:00')
+                 AND newer.id > m.id))
+       )
+     ORDER BY m.created_at DESC, m.id DESC`,
+    [userId, userId, userId],
+  );
+  return rows.map((row) => ({
+    ...mapMessage(row),
+    conversationUserId: row.conversationUserId,
+    username: row.username,
+    name: row.name || "",
+    profileImage: row.profileImage || "",
   }));
 }
 
@@ -260,7 +463,7 @@ module.exports = {
   getReelsByUserId,
   createStory,
   getActiveStories,
-  createMessage: async () => {}, // placeholder
-  getMessages: async () => [],
-  getConversations: async () => [],
+  createMessage,
+  getMessages,
+  getConversations,
 };
