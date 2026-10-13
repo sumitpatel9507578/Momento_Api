@@ -1,7 +1,9 @@
 require("dotenv").config();
 
+const http = require("node:http");
 const app = require("./src/app");
 const db = require("./src/config/db");
+const attachChatSocket = require("./src/services/chatSocket");
 
 const PORT = process.env.PORT || 3000;
 
@@ -12,7 +14,9 @@ async function startServer() {
     connection.release();
     console.log("Database connected successfully");
 
-    app.listen(PORT, "0.0.0.0", () => {
+    const server = http.createServer(app);
+    attachChatSocket(server);
+    server.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on port ${PORT}`);
     });
   } catch (error) {

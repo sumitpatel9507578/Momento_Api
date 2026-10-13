@@ -438,9 +438,38 @@ function mapMessage(row) {
     reelOwnerId: row.reelOwnerId ?? row.reel_owner_id ?? null,
     reelOwnerUsername:
       row.reelOwnerUsername ?? row.reel_owner_username ?? null,
+    clientMessageId: row.clientMessageId ?? row.client_message_id ?? null,
     isRead: row.isRead ?? row.is_read,
     createdAt: row.createdAt ?? row.created_at,
   };
+}
+
+async function getMessageById(messageId, columns) {
+  const reelFields = columns.includes("reel_id")
+    ? `m.reel_id AS reelId, r.video_url AS reelVideoUrl,
+       r.caption AS reelCaption, r.user_id AS reelOwnerId,
+       owner.username AS reelOwnerUsername`
+    : `NULL AS reelId, NULL AS reelVideoUrl,
+       NULL AS reelCaption, NULL AS reelOwnerId,
+       NULL AS reelOwnerUsername`;
+  const reelJoins = columns.includes("reel_id")
+    ? `LEFT JOIN reels r ON r.id = m.reel_id
+       LEFT JOIN users owner ON owner.id = r.user_id`
+    : "";
+  const clientIdField = columns.includes("client_message_id")
+    ? "m.client_message_id AS clientMessageId"
+    : "NULL AS clientMessageId";
+  const [rows] = await db.query(
+    `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
+            m.message, m.message_type AS messageType,
+            m.media_url AS mediaUrl, ${reelFields}, ${clientIdField},
+            m.is_read AS isRead, m.created_at AS createdAt
+     FROM messages m
+     ${reelJoins}
+     WHERE m.id = ?`,
+    [messageId],
+  );
+  return rows[0] ? mapMessage(rows[0]) : null;
 }
 
 // Persist a message using the authenticated sender and the verified messages schema.
@@ -451,6 +480,7 @@ async function createMessage(
   messageType,
   mediaUrl,
   reelId = null,
+  clientMessageId = null,
 ) {
   if (!MESSAGE_TYPES.includes(messageType)) {
     const error = new Error("Unsupported message type");
@@ -459,6 +489,23 @@ async function createMessage(
   }
 
   const columns = await requireMessageColumns();
+  if (clientMessageId && !columns.includes("client_message_id")) {
+    const error = new Error(
+      "Offline message delivery requires the approved client_message_id database migration",
+    );
+    error.code = "CHAT_IDEMPOTENCY_MIGRATION_REQUIRED";
+    throw error;
+  }
+  if (clientMessageId) {
+    const [existing] = await db.query(
+      `SELECT id FROM messages
+       WHERE sender_id = ? AND client_message_id = ? LIMIT 1`,
+      [senderId, clientMessageId],
+    );
+    if (existing[0]) {
+      return getMessageById(existing[0].id, columns);
+    }
+  }
   if (messageType === "reel" && !columns.includes("reel_id")) {
     const error = new Error(
       "Shared reel messages require the approved messages.reel_id migration",
@@ -494,37 +541,35 @@ async function createMessage(
     insertColumns.push("reel_id");
     insertValues.push(reelId || null);
   }
-  const [result] = await db.query(
-    `INSERT INTO messages (${insertColumns.join(", ")})
-     VALUES (${insertValues.map(() => "?").join(", ")})`,
-    insertValues,
-  );
+  if (clientMessageId) {
+    insertColumns.push("client_message_id");
+    insertValues.push(clientMessageId);
+  }
+  let result;
+  try {
+    [result] = await db.query(
+      `INSERT INTO messages (${insertColumns.join(", ")})
+       VALUES (${insertValues.map(() => "?").join(", ")})`,
+      insertValues,
+    );
+  } catch (error) {
+    if (error.code !== "ER_DUP_ENTRY" || !clientMessageId) throw error;
+    const [existing] = await db.query(
+      `SELECT id FROM messages
+       WHERE sender_id = ? AND client_message_id = ? LIMIT 1`,
+      [senderId, clientMessageId],
+    );
+    if (existing[0]) {
+      return getMessageById(existing[0].id, columns);
+    }
+    throw error;
+  }
 
-  const reelFields = columns.includes("reel_id")
-    ? `m.reel_id AS reelId, r.video_url AS reelVideoUrl,
-       r.caption AS reelCaption, r.user_id AS reelOwnerId,
-       owner.username AS reelOwnerUsername`
-    : `NULL AS reelId, NULL AS reelVideoUrl,
-       NULL AS reelCaption, NULL AS reelOwnerId,
-       NULL AS reelOwnerUsername`;
-  const reelJoins = columns.includes("reel_id")
-    ? `LEFT JOIN reels r ON r.id = m.reel_id
-       LEFT JOIN users owner ON owner.id = r.user_id`
-    : "";
-  const [rows] = await db.query(
-    `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
-            m.message, m.message_type AS messageType,
-            m.media_url AS mediaUrl, ${reelFields},
-            m.is_read AS isRead, m.created_at AS createdAt
-     FROM messages m
-     ${reelJoins}
-     WHERE m.id = ?`,
-    [result.insertId],
-  );
-  if (!rows[0]) {
+  const createdMessage = await getMessageById(result.insertId, columns);
+  if (!createdMessage) {
     throw new Error("The saved message could not be read back from the database");
   }
-  return mapMessage(rows[0]);
+  return createdMessage;
 }
 
 // Fetch both directions of a conversation from oldest to newest.
@@ -541,10 +586,13 @@ async function getMessages(userId, otherUserId) {
     ? `LEFT JOIN reels r ON r.id = m.reel_id
        LEFT JOIN users owner ON owner.id = r.user_id`
     : "";
+  const clientIdField = columns.includes("client_message_id")
+    ? "m.client_message_id AS clientMessageId"
+    : "NULL AS clientMessageId";
   const [rows] = await db.query(
     `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
             m.message, m.message_type AS messageType,
-            m.media_url AS mediaUrl, ${reelFields},
+            m.media_url AS mediaUrl, ${reelFields}, ${clientIdField},
             m.is_read AS isRead, m.created_at AS createdAt
      FROM messages m
      ${reelJoins}
@@ -554,6 +602,15 @@ async function getMessages(userId, otherUserId) {
     [userId, otherUserId, otherUserId, userId],
   );
   return rows.map(mapMessage);
+}
+
+async function markMessagesRead(userId, senderId) {
+  const [result] = await db.query(
+    `UPDATE messages SET is_read = 1
+     WHERE receiver_id = ? AND sender_id = ? AND is_read = 0`,
+    [userId, senderId],
+  );
+  return result.affectedRows;
 }
 
 // Return the newest message for each conversation, with its other participant.
@@ -634,5 +691,6 @@ module.exports = {
   getActiveStories,
   createMessage,
   getMessages,
+  markMessagesRead,
   getConversations,
 };

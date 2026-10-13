@@ -10,9 +10,20 @@ const storage = new CloudinaryStorage({
   },
 });
 
-const upload = multer({
+const uploadOptions = {
   storage: storage,
   limits: { fileSize: 100 * 1024 * 1024 },
-});
+};
+const upload = multer(uploadOptions);
+upload.chatAttachment = multer({
+  ...uploadOptions,
+  fileFilter: (_req, file, callback) => {
+    callback(
+      null,
+      file.mimetype?.startsWith("image/") ||
+        file.mimetype?.startsWith("video/"),
+    );
+  },
+}).single("media");
 
 module.exports = upload;

@@ -4,13 +4,16 @@ process.env.DB_NAME = process.env.DB_NAME || "momento_test";
 process.env.JWT_SECRET = "test-only-jwt-secret";
 
 const assert = require("node:assert/strict");
+const http = require("node:http");
 const { after, before, beforeEach, test } = require("node:test");
 const jwt = require("jsonwebtoken");
+const { io: createSocketClient } = require("socket.io-client");
 const app = require("../src/app");
 const db = require("../src/config/db");
 const followModel = require("../src/models/followModel");
 const postModel = require("../src/models/postModel");
 const userModel = require("../src/models/userModel");
+const attachChatSocket = require("../src/services/chatSocket");
 
 const messageColumns = [
   "id",
@@ -34,6 +37,7 @@ const storyColumns = [
 const likeColumns = ["id", "user_id", "post_id", "created_at"];
 let reelLikesEnabled = false;
 let reelMessagesEnabled = false;
+let chatIdempotencyEnabled = false;
 let storedMessages = [];
 let storedLikes = [];
 let storedStories = [];
@@ -46,6 +50,7 @@ let lastConversationQuery = "";
 let nextStoryId = 1;
 let nextQueryError = null;
 let server;
+let socketServer;
 let baseUrl;
 
 function columnRows(columns) {
@@ -73,7 +78,11 @@ async function fakeQuery(sql, params = []) {
   const table = normalizedSql.match(/^SHOW COLUMNS FROM (\w+)/i)?.[1];
   if (table === "messages") {
     return columnRows(
-      reelMessagesEnabled ? [...messageColumns, "reel_id"] : messageColumns,
+      [
+        ...messageColumns,
+        ...(reelMessagesEnabled ? ["reel_id"] : []),
+        ...(chatIdempotencyEnabled ? ["client_message_id"] : []),
+      ],
     );
   }
   if (table === "likes") {
@@ -197,6 +206,19 @@ async function fakeQuery(sql, params = []) {
         : [],
       [],
     ];
+  }
+
+  if (
+    normalizedSql.startsWith(
+      "SELECT id FROM messages WHERE sender_id = ? AND client_message_id = ?",
+    )
+  ) {
+    const existing = storedMessages.find(
+      (message) =>
+        message.sender_id === Number(params[0]) &&
+        message.client_message_id === params[1],
+    );
+    return [existing ? [{ id: existing.id }] : [], []];
   }
 
   if (normalizedSql.startsWith("SELECT message_id FROM saved_messages")) {
@@ -382,7 +404,23 @@ async function fakeQuery(sql, params = []) {
   }
 
   if (normalizedSql.startsWith("INSERT INTO messages")) {
-    const [senderId, receiverId, message, messageType, mediaUrl, reelId] = params;
+    const [senderId, receiverId, message, messageType, mediaUrl] = params;
+    const reelId = normalizedSql.includes("reel_id") ? params[5] : null;
+    const clientMessageId = normalizedSql.includes("client_message_id")
+      ? params.at(-1)
+      : null;
+    if (
+      clientMessageId &&
+      storedMessages.some(
+        (item) =>
+          item.sender_id === senderId &&
+          item.client_message_id === clientMessageId,
+      )
+    ) {
+      throw Object.assign(new Error("duplicate client message ID"), {
+        code: "ER_DUP_ENTRY",
+      });
+    }
     const record = {
       id: nextMessageId++,
       sender_id: senderId,
@@ -391,6 +429,7 @@ async function fakeQuery(sql, params = []) {
       message_type: messageType,
       media_url: mediaUrl,
       reel_id: reelMessagesEnabled ? reelId ?? null : null,
+      client_message_id: clientMessageId,
       is_read: 0,
       created_at: new Date(`2026-10-12T00:00:0${nextMessageId}Z`),
     };
@@ -422,6 +461,7 @@ async function fakeQuery(sql, params = []) {
               reelCaption: message.reel_id ? `Reel ${message.reel_id}` : null,
               reelOwnerId: message.reel_id ? 11 : null,
               reelOwnerUsername: message.reel_id ? "reel-owner" : null,
+              clientMessageId: message.client_message_id,
               isRead: message.is_read,
               createdAt: message.created_at,
             },
@@ -543,7 +583,9 @@ before(async () => {
   db.query = fakeQuery;
   userModel.getUserById = async (id) =>
     Number(id) === 404 ? null : { id: Number(id), username: `user-${id}` };
-  server = app.listen(0, "127.0.0.1");
+  server = http.createServer(app);
+  socketServer = attachChatSocket(server);
+  server.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -551,6 +593,7 @@ before(async () => {
 beforeEach(() => {
   reelLikesEnabled = false;
   reelMessagesEnabled = false;
+  chatIdempotencyEnabled = false;
   storedMessages = [];
   storedLikes = [];
   storedStories = [];
@@ -565,10 +608,187 @@ beforeEach(() => {
 });
 
 after(async () => {
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise((resolve) => socketServer.close(resolve));
   await db.end();
+});
+
+test("chat sockets authenticate, persist, deliver, report typing, and acknowledge reads", async (t) => {
+  const originalCreateMessage = postModel.createMessage;
+  const originalMarkMessagesRead = postModel.markMessagesRead;
+  const socketMessages = [];
+  let readReceipt;
+  t.after(() => {
+    postModel.createMessage = originalCreateMessage;
+    postModel.markMessagesRead = originalMarkMessagesRead;
+  });
+
+  postModel.createMessage = async (
+    senderId,
+    receiverId,
+    message,
+    messageType,
+    mediaUrl,
+    reelId,
+    clientMessageId,
+  ) => {
+    const existing = socketMessages.find(
+      (item) =>
+        item.senderId === senderId &&
+        item.clientMessageId === clientMessageId,
+    );
+    if (existing) return existing;
+    const created = {
+      id: String(socketMessages.length + 1),
+      senderId,
+      receiverId,
+      message,
+      messageType,
+      mediaUrl,
+      reelId,
+      clientMessageId,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+    socketMessages.push(created);
+    return created;
+  };
+  postModel.markMessagesRead = async () => 1;
+
+  const connect = (userId) =>
+    new Promise((resolve, reject) => {
+      const client = createSocketClient(baseUrl, {
+        transports: ["websocket"],
+        auth: { token: jwt.sign({ id: userId }, process.env.JWT_SECRET) },
+        reconnection: false,
+      });
+      client.once("connect", () => resolve(client));
+      client.once("connect_error", reject);
+    });
+  const sender = await connect(7);
+  const receiver = await connect(8);
+  t.after(() => {
+    sender.disconnect();
+    receiver.disconnect();
+  });
+
+  const typing = new Promise((resolve) => receiver.once("chat:typing", resolve));
+  sender.emit("chat:typing", { receiverId: 8, isTyping: true });
+  assert.deepEqual(await typing, { userId: 7, isTyping: true });
+
+  const delivered = new Promise((resolve) =>
+    receiver.once("chat:message", resolve),
+  );
+  const firstAck = await new Promise((resolve) => {
+    sender.emit(
+      "chat:send",
+      {
+        receiverId: 8,
+        message: "hello in realtime",
+        messageType: "text",
+        clientMessageId: "stable-client-id",
+      },
+      resolve,
+    );
+  });
+  assert.equal(firstAck.success, true);
+  assert.equal(firstAck.data.id, "1");
+  assert.equal((await delivered).message, "hello in realtime");
+
+  const duplicateAck = await new Promise((resolve) => {
+    sender.emit(
+      "chat:send",
+      {
+        receiverId: 8,
+        message: "hello in realtime",
+        messageType: "text",
+        clientMessageId: "stable-client-id",
+      },
+      resolve,
+    );
+  });
+  assert.equal(duplicateAck.data.id, "1");
+  assert.equal(socketMessages.length, 1);
+
+  const imageDelivered = new Promise((resolve) =>
+    receiver.once("chat:message", resolve),
+  );
+  const imageAck = await new Promise((resolve) => {
+    sender.emit(
+      "chat:send",
+      {
+        receiverId: 8,
+        message: "",
+        messageType: "image",
+        mediaUrl: "https://cdn.example/chat/photo.jpg",
+        clientMessageId: "image-client-id",
+      },
+      resolve,
+    );
+  });
+  assert.equal(imageAck.success, true);
+  assert.equal((await imageDelivered).mediaUrl, "https://cdn.example/chat/photo.jpg");
+
+  const invalidImageAck = await new Promise((resolve) => {
+    sender.emit(
+      "chat:send",
+      {
+        receiverId: 8,
+        message: "",
+        messageType: "image",
+        mediaUrl: "javascript:alert(1)",
+        clientMessageId: "invalid-image-client-id",
+      },
+      resolve,
+    );
+  });
+  assert.equal(invalidImageAck.code, "INVALID_MESSAGE");
+
+  const receipt = new Promise((resolve) => sender.once("chat:read", resolve));
+  receiver.emit("chat:read", { senderId: 7 });
+  readReceipt = await receipt;
+  assert.deepEqual(readReceipt, { readerId: 8, senderId: 7 });
+
+  const invalidUser = createSocketClient(baseUrl, {
+    transports: ["websocket"],
+    auth: { token: jwt.sign({ id: 404 }, process.env.JWT_SECRET) },
+    reconnection: false,
+  });
+  const connectError = await new Promise((resolve) =>
+    invalidUser.once("connect_error", resolve),
+  );
+  assert.equal(connectError.message, "ACCOUNT_NOT_FOUND");
+  invalidUser.disconnect();
+});
+
+test("chat retries reuse a client ID and require the idempotency migration", async () => {
+  await assert.rejects(
+    postModel.createMessage(7, 8, "queued once", "text", null, null, "retry-1"),
+    { code: "CHAT_IDEMPOTENCY_MIGRATION_REQUIRED" },
+  );
+
+  chatIdempotencyEnabled = true;
+  const first = await postModel.createMessage(
+    7,
+    8,
+    "queued once",
+    "text",
+    null,
+    null,
+    "retry-1",
+  );
+  const retry = await postModel.createMessage(
+    7,
+    8,
+    "queued once",
+    "text",
+    null,
+    null,
+    "retry-1",
+  );
+
+  assert.equal(first.id, retry.id);
+  assert.equal(first.clientMessageId, "retry-1");
+  assert.equal(storedMessages.length, 1);
 });
 
 test("messages use the authenticated sender and return chronological and empty conversations", async () => {

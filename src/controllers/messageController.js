@@ -25,6 +25,33 @@ function isValidMediaUrl(value) {
   }
 }
 
+async function uploadMessageAttachment(req, res) {
+  const file = req.file;
+  if (!file?.path) {
+    return res.status(400).json({
+      success: false,
+      message: "An image or video file is required",
+    });
+  }
+  const messageType = file.mimetype?.startsWith("image/")
+    ? "image"
+    : file.mimetype?.startsWith("video/")
+      ? "video"
+      : null;
+  if (!messageType) {
+    return res.status(400).json({
+      success: false,
+      message: "Only image and video attachments are supported",
+    });
+  }
+
+  return res.status(201).json({
+    success: true,
+    message: "Chat attachment uploaded successfully",
+    data: { mediaUrl: file.path, messageType },
+  });
+}
+
 async function createMessage(req, res) {
   try {
     const { receiverId, message, messageType, mediaUrl } = req.body;
@@ -67,6 +94,14 @@ async function createMessage(req, res) {
 
     if (mediaUrl !== undefined && mediaUrl !== null && !isValidMediaUrl(mediaUrl)) {
       return res.status(400).json({ success: false, message: "mediaUrl must be a valid HTTP or HTTPS URL" });
+    }
+
+    const sender = await userModel.getUserById(senderId);
+    if (!sender) {
+      return res.status(401).json({
+        success: false,
+        message: "Your account is not available on this server. Sign in again.",
+      });
     }
 
     const receiver = await userModel.getUserById(numericReceiverId);
@@ -149,6 +184,7 @@ async function getConversations(req, res) {
 }
 
 module.exports = {
+  uploadMessageAttachment,
   createMessage,
   getMessages,
   getConversations
