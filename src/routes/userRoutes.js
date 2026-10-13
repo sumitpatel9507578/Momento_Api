@@ -11,6 +11,19 @@ router.get("/profile/:userId", authMiddleware, userController.getProfile);
 router.get("/:userId/followers", authMiddleware, followController.getFollowers);
 router.get("/:userId/following", authMiddleware, followController.getFollowing);
 router.put(
+  "/me",
+  authMiddleware,
+  upload.fields([
+    { name: "profileImage", maxCount: 1 },
+    { name: "profile_image", maxCount: 1 },
+    { name: "profileimage", maxCount: 1 },
+    { name: "image", maxCount: 1 },
+    { name: "file", maxCount: 1 },
+    { name: "media", maxCount: 1 },
+  ]),
+  userController.updateProfile,
+);
+router.put(
   "/:id",
   authMiddleware,
   upload.fields([

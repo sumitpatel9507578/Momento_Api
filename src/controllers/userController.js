@@ -1,4 +1,5 @@
 const userModel = require("../models/userModel");
+const followModel = require("../models/followModel");
 
 // Get a user's public profile
 async function getProfile(req, res) {
@@ -26,7 +27,10 @@ async function getProfile(req, res) {
     return res.status(200).json({
       success: true,
       message: "User profile fetched successfully",
-      data: user,
+      data: {
+        ...user,
+        isFollowing: Boolean(await followModel.getFollow(req.user.id, userId)),
+      },
     });
   } catch (error) {
     console.error("Get profile error:", error);
@@ -69,7 +73,7 @@ async function getMe(req, res) {
 // Update the authenticated user's profile
 async function updateProfile(req, res) {
   try {
-    const userId = Number(req.params.id);
+    const userId = req.params.id ? Number(req.params.id) : req.user.id;
 
     if (req.user.id !== userId) {
       return res.status(403).json({
@@ -79,11 +83,15 @@ async function updateProfile(req, res) {
       });
     }
 
-    const { fullName, bio } = req.body;
+    const fullName =
+      req.body.fullName ?? req.body.full_name ?? req.body.name;
     const updates = {};
 
-    if (fullName) updates.fullName = fullName;
-    if (bio) updates.bio = bio;
+    if (fullName !== undefined) updates.fullName = String(fullName).trim();
+    if (req.body.username !== undefined) {
+      updates.username = String(req.body.username).trim().toLowerCase();
+    }
+    if (req.body.bio !== undefined) updates.bio = String(req.body.bio).trim();
     const uploadedFile =
       req.file ||
       req.files?.profileImage?.[0] ||
@@ -104,6 +112,17 @@ async function updateProfile(req, res) {
       });
     }
 
+    if (
+      (updates.fullName !== undefined && !updates.fullName) ||
+      (updates.username !== undefined && !updates.username)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Name and username cannot be empty",
+        data: null,
+      });
+    }
+
     await userModel.updateUser(userId, updates);
     const user = await userModel.getUserById(userId);
 
@@ -114,6 +133,13 @@ async function updateProfile(req, res) {
     });
   } catch (error) {
     console.error("Update profile error:", error);
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        success: false,
+        message: "Username is already taken",
+        data: null,
+      });
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to update profile",

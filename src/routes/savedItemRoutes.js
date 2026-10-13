@@ -8,5 +8,7 @@ router.post("/messages/:itemId", savedItemController.saveMessage);
 router.delete("/messages/:itemId", savedItemController.unsaveMessage);
 router.post("/reels/:itemId", savedItemController.saveReel);
 router.delete("/reels/:itemId", savedItemController.unsaveReel);
+router.post("/posts/:itemId", savedItemController.savePost);
+router.delete("/posts/:itemId", savedItemController.unsavePost);
 
 module.exports = router;

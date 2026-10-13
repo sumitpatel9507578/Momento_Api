@@ -8,6 +8,8 @@ const { after, before, beforeEach, test } = require("node:test");
 const jwt = require("jsonwebtoken");
 const app = require("../src/app");
 const db = require("../src/config/db");
+const followModel = require("../src/models/followModel");
+const postModel = require("../src/models/postModel");
 const userModel = require("../src/models/userModel");
 
 const messageColumns = [
@@ -37,6 +39,7 @@ let storedLikes = [];
 let storedStories = [];
 let savedMessages = [];
 let savedReels = [];
+let savedPosts = [];
 let savedItemsSchemaEnabled = true;
 let nextMessageId = 1;
 let lastConversationQuery = "";
@@ -59,7 +62,7 @@ async function fakeQuery(sql, params = []) {
   const normalizedSql = sql.replace(/\s+/g, " ").trim();
   if (
     !savedItemsSchemaEnabled &&
-    /FROM (?:saved_messages|saved_reels)|INTO (?:saved_messages|saved_reels)/i.test(
+    /FROM (?:saved_messages|saved_reels|saved_posts)|INTO (?:saved_messages|saved_reels|saved_posts)/i.test(
       normalizedSql,
     )
   ) {
@@ -80,7 +83,11 @@ async function fakeQuery(sql, params = []) {
   if (table === "users") {
     return columnRows(["id", "username", "full_name", "profile_image"]);
   }
-  if (table === "saved_messages" || table === "saved_reels") {
+  if (
+    table === "saved_messages" ||
+    table === "saved_reels" ||
+    table === "saved_posts"
+  ) {
     if (!savedItemsSchemaEnabled) {
       throw Object.assign(new Error("table does not exist"), {
         code: "ER_NO_SUCH_TABLE",
@@ -89,7 +96,9 @@ async function fakeQuery(sql, params = []) {
     return columnRows(
       table === "saved_messages"
         ? ["user_id", "message_id", "saved_at"]
-        : ["user_id", "reel_id", "saved_at"],
+        : table === "saved_reels"
+          ? ["user_id", "reel_id", "saved_at"]
+          : ["user_id", "post_id", "saved_at"],
     );
   }
 
@@ -108,6 +117,41 @@ async function fakeQuery(sql, params = []) {
           ],
       [],
     ];
+  }
+
+  if (normalizedSql.startsWith("SELECT post_id FROM saved_posts")) {
+    const existing = savedPosts.find(
+      (bookmark) =>
+        bookmark.user_id === Number(params[0]) &&
+        bookmark.post_id === Number(params[1]),
+    );
+    return [existing ? [{ post_id: existing.post_id }] : [], []];
+  }
+
+  if (normalizedSql.startsWith("INSERT INTO saved_posts")) {
+    const [userId, postId] = params.map(Number);
+    if (
+      savedPosts.some(
+        (bookmark) =>
+          bookmark.user_id === userId && bookmark.post_id === postId,
+      )
+    ) {
+      throw Object.assign(new Error("duplicate saved post"), {
+        code: "ER_DUP_ENTRY",
+      });
+    }
+    savedPosts.push({ user_id: userId, post_id: postId, saved_at: new Date() });
+    return [{ affectedRows: 1 }, []];
+  }
+
+  if (normalizedSql.startsWith("DELETE FROM saved_posts")) {
+    const [userId, postId] = params.map(Number);
+    const originalLength = savedPosts.length;
+    savedPosts = savedPosts.filter(
+      (bookmark) =>
+        bookmark.user_id !== userId || bookmark.post_id !== postId,
+    );
+    return [{ affectedRows: originalLength - savedPosts.length }, []];
   }
 
   const targetMatch = normalizedSql.match(/^SELECT id FROM (posts|reels) WHERE id = \?/);
@@ -256,6 +300,28 @@ async function fakeQuery(sql, params = []) {
             conversationProfileImage: null,
           };
         }),
+      [],
+    ];
+  }
+
+  if (normalizedSql.startsWith("SELECT p.id AS itemId, sp.saved_at AS savedAt")) {
+    return [
+      savedPosts
+        .filter((bookmark) => bookmark.user_id === Number(params[0]))
+        .map((bookmark) => ({
+        itemType: "post",
+        itemId: bookmark.post_id,
+        savedAt: bookmark.saved_at,
+        userId: 11,
+        username: "post-owner",
+        name: "Post Owner",
+        profileImage: null,
+        mediaUrl: `https://cdn.example/posts/${bookmark.post_id}.jpg`,
+        mediaType: "image",
+        caption: `Post ${bookmark.post_id}`,
+        likesCount: 0,
+        commentsCount: 0,
+        })),
       [],
     ];
   }
@@ -490,6 +556,7 @@ beforeEach(() => {
   storedStories = [];
   savedMessages = [];
   savedReels = [];
+  savedPosts = [];
   savedItemsSchemaEnabled = true;
   nextMessageId = 1;
   lastConversationQuery = "";
@@ -614,7 +681,7 @@ test("shared reel messages persist the canonical reel ID and require its schema 
   assert.equal(invalidReel.status, 404);
 });
 
-test("saved messages and reels persist per user, are idempotent, and do not mutate content", async () => {
+test("saved posts, messages, and reels persist per user without mutating content", async () => {
   const sent = await request("/api/messages", {
     method: "POST",
     body: JSON.stringify({ receiverId: 8, message: "bookmark me" }),
@@ -664,6 +731,33 @@ test("saved messages and reels persist per user, are idempotent, and do not muta
   });
   assert.equal((await duplicateReelSave.json()).data.alreadySaved, true);
   assert.equal(savedReels.length, 1);
+
+  const savePost = await request("/api/saved-items/posts/12", {
+    method: "POST",
+  });
+  assert.equal(savePost.status, 200);
+  assert.deepEqual((await savePost.json()).data, {
+    itemType: "post",
+    itemId: 12,
+    saved: true,
+    alreadySaved: false,
+  });
+  const duplicatePostSave = await request("/api/saved-items/posts/12", {
+    method: "POST",
+  });
+  assert.equal((await duplicatePostSave.json()).data.alreadySaved, true);
+  assert.equal(savedPosts.length, 1);
+  const missingPost = await request("/api/saved-items/posts/404", {
+    method: "POST",
+  });
+  assert.equal(missingPost.status, 404);
+
+  const separateUserSave = await request("/api/saved-items/posts/12", {
+    method: "POST",
+    authUserId: 8,
+  });
+  assert.equal(separateUserSave.status, 200);
+  assert.equal(savedPosts.length, 2);
   assert.equal(storedLikes.length, 0);
 
   const savedItemsResponse = await request("/api/saved-items");
@@ -671,7 +765,11 @@ test("saved messages and reels persist per user, are idempotent, and do not muta
   const items = (await savedItemsResponse.json()).data;
   assert.deepEqual(
     items.map((item) => item.itemType).sort(),
-    ["message", "reel"],
+    ["message", "post", "reel"],
+  );
+  assert.equal(
+    items.find((item) => item.itemType === "post").mediaUrl,
+    "https://cdn.example/posts/12.jpg",
   );
   assert.equal(items.find((item) => item.itemType === "reel").videoUrl,
     "https://cdn.example/reels/9.mp4");
@@ -687,6 +785,11 @@ test("saved messages and reels persist per user, are idempotent, and do not muta
     (await request("/api/saved-items/reels/9", { method: "DELETE" })).status,
     200,
   );
+  assert.equal(
+    (await request("/api/saved-items/posts/12", { method: "DELETE" })).status,
+    200,
+  );
+  assert.equal(savedPosts.some((bookmark) => bookmark.user_id === 7), false);
   assert.deepEqual((await (await request("/api/saved-items")).json()).data, []);
   assert.equal(savedMessages.length, 0);
   assert.equal(savedReels.length, 0);
@@ -739,6 +842,176 @@ test("reel-like aliases use reel_id, toggle state, and never create post likes",
   assert.equal(postLike.status, 201);
   assert.equal(storedLikes.at(-1).post_id, 25);
   assert.equal(storedLikes.at(-1).reel_id, null);
+});
+
+test("profile update accepts the current-user route and Flutter field names", async (t) => {
+  const originalUpdateUser = userModel.updateUser;
+  const originalGetUserById = userModel.getUserById;
+  let saved;
+  t.after(() => {
+    userModel.updateUser = originalUpdateUser;
+    userModel.getUserById = originalGetUserById;
+  });
+
+  userModel.updateUser = async (id, updates) => {
+    saved = { id, updates };
+  };
+  userModel.getUserById = async (id) => ({
+    id,
+    name: saved.updates.fullName,
+    username: saved.updates.username,
+    bio: saved.updates.bio,
+  });
+
+  const response = await request("/api/users/me", {
+    method: "PUT",
+    body: JSON.stringify({
+      full_name: "Updated Name",
+      name: "Updated Name",
+      username: "newname",
+      bio: "",
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(saved, {
+    id: 7,
+    updates: {
+      fullName: "Updated Name",
+      username: "newname",
+      bio: "",
+    },
+  });
+  assert.equal((await response.json()).data.username, "newname");
+});
+
+test("profile relationship endpoints return viewer follow status", async (t) => {
+  const originalGetFollow = followModel.getFollow;
+  const originalGetFollowers = followModel.getFollowers;
+  const originalGetFollowing = followModel.getFollowing;
+  const originalGetUserById = userModel.getUserById;
+  t.after(() => {
+    followModel.getFollow = originalGetFollow;
+    followModel.getFollowers = originalGetFollowers;
+    followModel.getFollowing = originalGetFollowing;
+    userModel.getUserById = originalGetUserById;
+  });
+
+  userModel.getUserById = async (id) => ({ id, username: `user-${id}` });
+  followModel.getFollow = async (viewerId, targetId) =>
+    viewerId === 7 && targetId === 8 ? { id: 1 } : null;
+  followModel.getFollowers = async (targetId, viewerId) => [
+    { id: 9, isFollowing: viewerId === 7 },
+  ];
+  followModel.getFollowing = async (targetId, viewerId) => [
+    { id: 10, isFollowing: viewerId === 7 },
+  ];
+
+  const profile = await request("/api/users/8");
+  assert.equal((await profile.json()).data.isFollowing, true);
+
+  const followers = await request("/api/users/8/followers");
+  assert.equal((await followers.json()).data[0].isFollowing, true);
+
+  const following = await request("/api/users/8/following");
+  assert.equal((await following.json()).data[0].isFollowing, true);
+});
+
+test("profile post requests include the authenticated user's like state", async (t) => {
+  const originalGetPostsByUserId = postModel.getPostsByUserId;
+  let requestedBy;
+  t.after(() => {
+    postModel.getPostsByUserId = originalGetPostsByUserId;
+  });
+
+  postModel.getPostsByUserId = async (ownerId, viewerId) => {
+    requestedBy = { ownerId, viewerId };
+    return [{ id: 12, userId: ownerId, isLiked: viewerId === 7 }];
+  };
+
+  const response = await request("/api/posts/user/8");
+  assert.equal(response.status, 200);
+  assert.deepEqual(requestedBy, { ownerId: "8", viewerId: 7 });
+  assert.equal((await response.json()).data[0].isLiked, true);
+});
+
+test("post captions and deletion are available only through the authenticated endpoints", async (t) => {
+  const originalUpdate = postModel.updatePostCaption;
+  const originalDelete = postModel.deletePost;
+  const calls = [];
+  t.after(() => {
+    postModel.updatePostCaption = originalUpdate;
+    postModel.deletePost = originalDelete;
+  });
+
+  postModel.updatePostCaption = async (postId, userId, caption) => {
+    calls.push({ operation: "update", postId, userId, caption });
+    return postId === 12 && userId === 7;
+  };
+  postModel.deletePost = async (postId, userId) => {
+    calls.push({ operation: "delete", postId, userId });
+    return postId === 12 && userId === 7;
+  };
+
+  const updated = await request("/api/posts/12", {
+    method: "PUT",
+    body: JSON.stringify({ caption: "Edited caption" }),
+  });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(calls[0], {
+    operation: "update",
+    postId: 12,
+    userId: 7,
+    caption: "Edited caption",
+  });
+
+  const deleted = await request("/api/posts/12", { method: "DELETE" });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(calls[1], {
+    operation: "delete",
+    postId: 12,
+    userId: 7,
+  });
+
+  postModel.deletePost = async () => false;
+  assert.equal((await request("/api/posts/12", { method: "DELETE" })).status, 404);
+});
+
+test("post deletion removes dependent social rows in one transaction", async (t) => {
+  const originalGetConnection = db.getConnection;
+  const statements = [];
+  let committed = false;
+  let released = false;
+  t.after(() => {
+    db.getConnection = originalGetConnection;
+  });
+
+  db.getConnection = async () => ({
+    beginTransaction: async () => statements.push("BEGIN"),
+    query: async (sql, params) => {
+      statements.push({ sql: sql.replace(/\s+/g, " ").trim(), params });
+      if (sql.includes("SELECT id FROM posts")) return [[{ id: 12 }], []];
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => {
+      committed = true;
+    },
+    rollback: async () => {
+      statements.push("ROLLBACK");
+    },
+    release: () => {
+      released = true;
+    },
+  });
+
+  assert.equal(await postModel.deletePost(12, 7), true);
+  assert.equal(statements[0], "BEGIN");
+  assert.match(statements[1].sql, /WHERE id = \? AND user_id = \? FOR UPDATE/);
+  assert.match(statements[2].sql, /DELETE FROM likes/);
+  assert.match(statements[3].sql, /DELETE FROM comments/);
+  assert.match(statements[4].sql, /DELETE FROM posts/);
+  assert.equal(committed, true);
+  assert.equal(released, true);
 });
 
 test("reel details can be loaded by canonical ID for saved-item navigation", async () => {

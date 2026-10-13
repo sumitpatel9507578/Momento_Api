@@ -8,5 +8,7 @@ router.get("/user/:userId", authMiddleware, postController.getUserPosts);
 router.get("/:postId/comments", authMiddleware, postController.getComments);
 router.post("/", authMiddleware, upload.single("media"), postController.createPost);
 router.post("/:postId/comments", authMiddleware, postController.createComment);
+router.put("/:postId", authMiddleware, postController.updatePost);
+router.delete("/:postId", authMiddleware, postController.deletePost);
 
 module.exports = router;

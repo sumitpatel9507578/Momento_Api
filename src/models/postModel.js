@@ -30,28 +30,46 @@ async function getPostById(postId) {
   return _mapPost(rows[0]);
 }
 
-async function getFeed(limit = 20, offset = 0) {
+async function getFeed(limit = 20, offset = 0, viewerId = null) {
   const [rows] = await db.query(
     `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image,
      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likesCount,
-     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as commentsCount
+     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as commentsCount,
+     EXISTS (
+       SELECT 1 FROM likes viewer_like
+       WHERE viewer_like.post_id = p.id AND viewer_like.user_id = ?
+     ) AS isLiked,
+     EXISTS (
+       SELECT 1 FROM saved_posts viewer_saved
+       WHERE viewer_saved.post_id = p.id AND viewer_saved.user_id = ?
+     ) AS isSaved
      FROM posts p
      JOIN users u ON p.user_id = u.id
      ORDER BY p.created_at DESC
      LIMIT ?, ?`,
-    [offset, limit],
+    [viewerId, viewerId, offset, limit],
   );
   return rows.map(_mapPost);
 }
 
-async function getPostsByUserId(userId) {
+async function getPostsByUserId(userId, viewerId = null) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name, u.profileImage
+    `SELECT p.*, u.username, u.full_name, u.profileImage,
+     (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likesCount,
+     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as commentsCount,
+     EXISTS (
+       SELECT 1 FROM likes viewer_like
+       WHERE viewer_like.post_id = p.id AND viewer_like.user_id = ?
+     ) AS isLiked,
+     EXISTS (
+       SELECT 1 FROM saved_posts viewer_saved
+       WHERE viewer_saved.post_id = p.id AND viewer_saved.user_id = ?
+     ) AS isSaved
      FROM posts p
      JOIN users u ON p.user_id = u.id
      WHERE p.user_id = ?
      ORDER BY p.id DESC`,
-    [userId],
+    [viewerId, viewerId, userId],
   );
   return rows.map(_mapPost);
 }
@@ -69,6 +87,8 @@ function _mapPost(p) {
     caption: p.caption || "",
     likesCount: p.likesCount || 0,
     commentsCount: p.commentsCount || 0,
+    isLiked: Boolean(p.isLiked),
+    isSaved: Boolean(p.isSaved),
     createdAt: p.createdAt || p.created_at || null,
   };
 }
@@ -150,11 +170,55 @@ async function deleteLike(userId, postId, reelId = null) {
     error.code = "REEL_LIKES_MIGRATION_REQUIRED";
     throw error;
   }
-
   await db.query(
     `DELETE FROM likes WHERE user_id = ? AND ${target.column} = ?`,
     [userId, target.id],
   );
+}
+
+async function updatePostCaption(postId, userId, caption) {
+  const [result] = await db.query(
+    "UPDATE posts SET caption = ? WHERE id = ? AND user_id = ?",
+    [caption, postId, userId],
+  );
+  if (result.affectedRows > 0) return true;
+
+  const [posts] = await db.query(
+    "SELECT id FROM posts WHERE id = ? AND user_id = ?",
+    [postId, userId],
+  );
+  return posts.length > 0;
+}
+
+async function deletePost(postId, userId) {
+  const connection = await db.getConnection();
+  let transactionStarted = false;
+  try {
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const [posts] = await connection.query(
+      "SELECT id FROM posts WHERE id = ? AND user_id = ? FOR UPDATE",
+      [postId, userId],
+    );
+    if (posts.length === 0) {
+      await connection.rollback();
+      return false;
+    }
+
+    await connection.query("DELETE FROM likes WHERE post_id = ?", [postId]);
+    await connection.query("DELETE FROM comments WHERE post_id = ?", [postId]);
+    const [result] = await connection.query(
+      "DELETE FROM posts WHERE id = ? AND user_id = ?",
+      [postId, userId],
+    );
+    await connection.commit();
+    return result.affectedRows > 0;
+  } catch (error) {
+    if (transactionStarted) await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 async function createComment(userId, postId, comment, reelId = null) {
@@ -548,6 +612,8 @@ module.exports = {
   getLike,
   createLike,
   deleteLike,
+  updatePostCaption,
+  deletePost,
   createComment,
   getCommentsByPostId,
   getCommentsByReelId,

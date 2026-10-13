@@ -74,7 +74,7 @@ async function getFollowers(req, res) {
       });
     }
 
-    const followers = await followModel.getFollowers(userId);
+    const followers = await followModel.getFollowers(userId, req.user.id);
     return res.status(200).json({
       success: true,
       message: "Followers fetched successfully",
@@ -101,7 +101,7 @@ async function getFollowing(req, res) {
       });
     }
 
-    const following = await followModel.getFollowing(userId);
+    const following = await followModel.getFollowing(userId, req.user.id);
     return res.status(200).json({
       success: true,
       message: "Following fetched successfully",

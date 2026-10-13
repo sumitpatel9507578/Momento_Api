@@ -2,7 +2,11 @@ const db = require("../config/db");
 
 function createNotFoundError(itemType) {
   const error = new Error(
-    itemType === "message" ? "Message not found" : "Reel not found",
+    itemType === "message"
+      ? "Message not found"
+      : itemType === "post"
+        ? "Post not found"
+        : "Reel not found",
   );
   error.code = "SAVED_ITEM_NOT_FOUND";
   return error;
@@ -89,8 +93,53 @@ async function unsaveReel(userId, reelId) {
   return { saved: false };
 }
 
-// Load the user's saved message and reel references from MySQL.
+async function savePost(userId, postId) {
+  const [posts] = await db.query(`SELECT id FROM posts WHERE id = ?`, [postId]);
+  if (posts.length === 0) throw createNotFoundError("post");
+
+  const [existing] = await db.query(
+    `SELECT post_id FROM saved_posts WHERE user_id = ? AND post_id = ?`,
+    [userId, postId],
+  );
+  if (existing.length > 0) return { saved: true, alreadySaved: true };
+
+  try {
+    await db.query(
+      `INSERT INTO saved_posts (user_id, post_id) VALUES (?, ?)`,
+      [userId, postId],
+    );
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+    return { saved: true, alreadySaved: true };
+  }
+  return { saved: true, alreadySaved: false };
+}
+
+async function unsavePost(userId, postId) {
+  await db.query(
+    `DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?`,
+    [userId, postId],
+  );
+  return { saved: false };
+}
+
+// Load the user's saved post, message, and reel references from MySQL.
 async function getSavedItems(userId) {
+  const [postRows] = await db.query(
+    `SELECT p.id AS itemId, sp.saved_at AS savedAt,
+            p.user_id AS userId, p.caption,
+            p.media_url AS mediaUrl, p.media_type AS mediaType,
+            p.created_at AS createdAt,
+            owner.username, owner.full_name AS name,
+            COALESCE(owner.profileImage, '') AS profileImage,
+            (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS likesCount,
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS commentsCount
+     FROM saved_posts sp
+     JOIN posts p ON p.id = sp.post_id
+     JOIN users owner ON owner.id = p.user_id
+     WHERE sp.user_id = ?`,
+    [userId],
+  );
   const [messageRows] = await db.query(
     `SELECT m.id AS itemId, sm.saved_at AS savedAt,
             m.sender_id AS senderId, m.receiver_id AS receiverId,
@@ -128,6 +177,7 @@ async function getSavedItems(userId) {
   );
 
   const items = [
+    ...postRows.map((row) => ({ itemType: "post", ...row })),
     ...messageRows.map((row) => ({ itemType: "message", ...row })),
     ...reelRows.map((row) => ({ itemType: "reel", ...row })),
   ];
@@ -140,5 +190,7 @@ module.exports = {
   unsaveMessage,
   saveReel,
   unsaveReel,
+  savePost,
+  unsavePost,
   getSavedItems,
 };

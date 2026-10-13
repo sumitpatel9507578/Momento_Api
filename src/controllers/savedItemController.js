@@ -42,9 +42,13 @@ async function updateSavedItem(req, res, itemType, shouldSave) {
         ? shouldSave
           ? savedItemModel.saveMessage
           : savedItemModel.unsaveMessage
-        : shouldSave
-          ? savedItemModel.saveReel
-          : savedItemModel.unsaveReel;
+        : itemType === "post"
+          ? shouldSave
+            ? savedItemModel.savePost
+            : savedItemModel.unsavePost
+          : shouldSave
+            ? savedItemModel.saveReel
+            : savedItemModel.unsaveReel;
     const data = await operation(userId, itemId);
     return res.status(200).json({
       success: true,
@@ -76,6 +80,14 @@ async function unsaveReel(req, res) {
   return updateSavedItem(req, res, "reel", false);
 }
 
+async function savePost(req, res) {
+  return updateSavedItem(req, res, "post", true);
+}
+
+async function unsavePost(req, res) {
+  return updateSavedItem(req, res, "post", false);
+}
+
 async function getSavedItems(req, res) {
   const userId = parsePositiveId(req.user?.id);
   if (!userId) {
@@ -99,5 +111,7 @@ module.exports = {
   unsaveMessage,
   saveReel,
   unsaveReel,
+  savePost,
+  unsavePost,
   getSavedItems,
 };

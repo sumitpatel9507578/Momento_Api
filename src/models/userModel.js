@@ -118,6 +118,8 @@ async function updateUser(id, updates) {
     let dbKey = key;
     if (key === "fullName" || key === "name")
       dbKey = cols.includes("full_name") ? "full_name" : "name";
+    if (key === "username") dbKey = "username";
+    if (key === "bio") dbKey = "bio";
     if (key === "profileImage" || key === "profile_image")
       dbKey = cols.includes("profile_image") ? "profile_image" : "profileImage";
 

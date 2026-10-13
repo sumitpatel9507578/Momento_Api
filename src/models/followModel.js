@@ -1,6 +1,6 @@
 const db = require("../config/db");
 
-async function getRelationshipUsers(userId, direction) {
+async function getRelationshipUsers(userId, direction, viewerId) {
   const [userColumns] = await db.query("SHOW COLUMNS FROM users");
   const columns = userColumns.map((column) => column.Field);
   const nameColumn = columns.includes("name") ? "name" : "full_name";
@@ -14,12 +14,17 @@ async function getRelationshipUsers(userId, direction) {
 
   const [rows] = await db.query(
     `SELECT u.id, u.username, u.${nameColumn} AS name,
-            u.${imageColumn} AS profile_image
+            u.${imageColumn} AS profile_image,
+            EXISTS (
+              SELECT 1 FROM follows viewer_follow
+              WHERE viewer_follow.follower_id = ?
+                AND viewer_follow.following_id = u.id
+            ) AS isFollowing
      FROM users u
      JOIN follows f ON u.id = ${selectedUserColumn}
      WHERE ${relationshipColumn} = ?
      ORDER BY u.id DESC`,
-    [userId],
+    [viewerId, userId],
   );
 
   return rows.map((user) => ({
@@ -27,15 +32,16 @@ async function getRelationshipUsers(userId, direction) {
     username: user.username,
     name: user.name || "",
     profile_image: user.profile_image || "",
+    isFollowing: Boolean(user.isFollowing),
   }));
 }
 
-async function getFollowers(userId) {
-  return getRelationshipUsers(userId, "followers");
+async function getFollowers(userId, viewerId) {
+  return getRelationshipUsers(userId, "followers", viewerId);
 }
 
-async function getFollowing(userId) {
-  return getRelationshipUsers(userId, "following");
+async function getFollowing(userId, viewerId) {
+  return getRelationshipUsers(userId, "following", viewerId);
 }
 
 // Find an existing follow relationship between two users
