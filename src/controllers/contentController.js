@@ -120,6 +120,45 @@ async function createReel(req, res) {
   }
 }
 
+async function deleteReel(req, res) {
+  const reelId = req.params.reelId;
+  if (!/^[1-9]\d*$/.test(reelId)) {
+    return res.status(400).json({
+      success: false,
+      message: "A valid reel ID is required",
+    });
+  }
+
+  const userId = Number(req.user?.id);
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid authenticated user",
+    });
+  }
+
+  try {
+    const deleted = await postModel.deleteReel(reelId, userId);
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Reel not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Reel deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete reel error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete reel",
+    });
+  }
+}
+
 // Get active stories
 async function getStories(req, res) {
   try {
@@ -253,6 +292,7 @@ module.exports = {
   getReel,
   getUserReels,
   createReel,
+  deleteReel,
   getStories,
   createStory,
 };

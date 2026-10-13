@@ -323,6 +323,14 @@ async function getReelsByUserId(userId) {
   }));
 }
 
+async function deleteReel(reelId, userId) {
+  const [result] = await db.query(
+    `DELETE FROM reels WHERE id = ? AND user_id = ?`,
+    [reelId, userId],
+  );
+  return result.affectedRows > 0;
+}
+
 // --- Stories ---
 async function createStory(userId, mediaUrl, mediaType, caption, expiresAt) {
   const cols = await getTableCols("stories");
@@ -621,6 +629,7 @@ module.exports = {
   getReels,
   getReelById,
   getReelsByUserId,
+  deleteReel,
   createStory,
   getActiveStories,
   createMessage,

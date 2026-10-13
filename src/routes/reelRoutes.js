@@ -21,5 +21,6 @@ router.post(
   contentController.createReel,
 );
 router.post("/:reelId/comments", authMiddleware, postController.createComment);
+router.delete("/:reelId", authMiddleware, contentController.deleteReel);
 
 module.exports = router;

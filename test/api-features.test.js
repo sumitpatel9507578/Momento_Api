@@ -818,6 +818,40 @@ test("saved items report unavailable migration and enforce authentication", asyn
   assert.equal(invalidId.status, 400);
 });
 
+test("reel deletion is authenticated and limited to the reel owner", async (t) => {
+  const originalDeleteReel = postModel.deleteReel;
+  const deletedBy = [];
+  t.after(() => {
+    postModel.deleteReel = originalDeleteReel;
+  });
+
+  postModel.deleteReel = async (reelId, userId) => {
+    deletedBy.push({ reelId, userId });
+    return reelId === "9" && userId === 7;
+  };
+
+  const deleted = await request("/api/reels/9", { method: "DELETE" });
+  assert.equal(deleted.status, 200);
+  assert.equal((await deleted.json()).success, true);
+  assert.deepEqual(deletedBy, [{ reelId: "9", userId: 7 }]);
+
+  const notOwner = await request("/api/reels/9", {
+    method: "DELETE",
+    authUserId: 8,
+  });
+  assert.equal(notOwner.status, 404);
+
+  const invalidId = await request("/api/reels/not-an-id", {
+    method: "DELETE",
+  });
+  assert.equal(invalidId.status, 400);
+
+  const unauthenticated = await fetch(`${baseUrl}/api/reels/9`, {
+    method: "DELETE",
+  });
+  assert.equal(unauthenticated.status, 401);
+});
+
 test("reel-like aliases use reel_id, toggle state, and never create post likes", async () => {
   reelLikesEnabled = true;
   const aliases = [
