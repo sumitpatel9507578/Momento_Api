@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const notificationModel = require("./notificationModel");
 
 // Read table metadata so SQL only uses columns that the database actually has.
 async function getTableCols(tableName) {
@@ -132,6 +133,15 @@ async function ensureLikeTargetExists(target) {
     error.code = "LIKE_TARGET_NOT_FOUND";
     throw error;
   }
+}
+
+async function getContentOwner(postId, reelId = null) {
+  const target = getLikeTarget(postId, reelId);
+  const [rows] = await db.query(
+    `SELECT user_id FROM ${target.table} WHERE id = ?`,
+    [target.id],
+  );
+  return rows[0]?.user_id ?? null;
 }
 
 async function getLike(userId, postId, reelId = null) {
@@ -402,6 +412,15 @@ async function createStory(userId, mediaUrl, mediaType, caption, expiresAt, opti
        VALUES ${mentionIds.map(() => "(?, ?)").join(", ")}`,
       mentionIds.flatMap((mentionedId) => [result.insertId, mentionedId]),
     );
+    for (const mentionedId of mentionIds) {
+      await notificationModel.createNotification(
+        mentionedId,
+        userId,
+        "mention",
+        "story",
+        result.insertId,
+      );
+    }
   }
   return result.insertId;
 }
@@ -432,7 +451,9 @@ async function getActiveStories(viewerId) {
     : "NULL";
 
   const [rows] = await db.query(
-    `SELECT s.*, u.username, ${profileImageSelect} AS profile_image
+    `SELECT s.*, u.username, ${profileImageSelect} AS profile_image,
+            (SELECT JSON_ARRAYAGG(sm.user_id)
+             FROM story_mentions sm WHERE sm.story_id = s.id) AS mentions
      FROM stories s
      JOIN users u ON u.id = s.user_id
      WHERE s.expires_at > NOW()
@@ -762,6 +783,7 @@ module.exports = {
   getFeed,
   getPostsByUserId,
   getLike,
+  getContentOwner,
   createLike,
   deleteLike,
   updatePostCaption,

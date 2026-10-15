@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const notificationModel = require("../models/notificationModel");
 
 function parseId(value) {
   const id = Number(value);
@@ -35,6 +36,18 @@ async function toggleLike(req, res) {
     } catch (error) {
       if (error.code !== "ER_DUP_ENTRY") throw error;
     }
+    const userColumn = await getCommentUserColumn();
+    const [ownerRows] = await db.query(
+      `SELECT ${userColumn} AS userId FROM comments WHERE id = ?`,
+      [commentId],
+    );
+    await notificationModel.createNotification(
+      ownerRows[0]?.userId,
+      userId,
+      "like",
+      "comment",
+      commentId,
+    );
     return res.json({ success: true, data: { isLiked: true } });
   } catch (error) {
     console.error("Toggle comment like error:", error);

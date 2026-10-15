@@ -13,6 +13,17 @@ async function getNotificationsByUserId(userId) {
   return rows;
 }
 
+async function createNotification(userId, actorId, eventType, entityType, entityId) {
+  if (Number(userId) === Number(actorId)) return;
+  await db.query(
+    `INSERT INTO notifications
+       (user_id, actor_id, event_type, entity_type, entity_id, is_read)
+     VALUES (?, ?, ?, ?, ?, 0)`,
+    [userId, actorId, eventType, entityType, entityId],
+  );
+}
+
 module.exports = {
   getNotificationsByUserId,
+  createNotification,
 };

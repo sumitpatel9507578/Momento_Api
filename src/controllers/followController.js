@@ -1,5 +1,6 @@
 const followModel = require("../models/followModel");
 const userModel = require("../models/userModel");
+const notificationModel = require("../models/notificationModel");
 
 // Follow another user while preventing self-follows and duplicates
 async function followUser(req, res) {
@@ -47,6 +48,13 @@ async function followUser(req, res) {
     }
 
     await followModel.createFollow(req.user.id, targetUserId);
+    await notificationModel.createNotification(
+      targetUserId,
+      req.user.id,
+      "follow",
+      "user",
+      req.user.id,
+    );
 
     return res.status(201).json({
       success: true,

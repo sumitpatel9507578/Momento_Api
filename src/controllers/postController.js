@@ -1,5 +1,6 @@
 const postModel = require("../models/postModel");
 const db = require("../config/db");
+const notificationModel = require("../models/notificationModel");
 
 // --- Feed ---
 async function getFeed(req, res) {
@@ -207,7 +208,15 @@ async function likePost(req, res) {
       });
     }
 
+    const ownerId = await postModel.getContentOwner(postTargetId, reelTargetId);
     await postModel.createLike(req.user.id, postTargetId, reelTargetId);
+    await notificationModel.createNotification(
+      ownerId,
+      req.user.id,
+      "like",
+      hasPostId ? "post" : "reel",
+      contentId,
+    );
     return res.status(201).json({
       success: true,
       message: "Liked",
@@ -261,12 +270,20 @@ async function createComment(req, res) {
     if (parentCommentId !== null && (!Number.isSafeInteger(parentCommentId) || parentCommentId <= 0)) {
       return res.status(400).json({ success: false, message: "parentCommentId must be a positive integer" });
     }
-    await postModel.createComment(req.user.id, postId, comment, reelId, parentCommentId);
+    const contentOwnerId = await postModel.getContentOwner(postId, reelId);
+    const commentId = await postModel.createComment(req.user.id, postId, comment, reelId, parentCommentId);
+    await notificationModel.createNotification(
+      contentOwnerId,
+      req.user.id,
+      "comment",
+      reelId ? "reel" : "post",
+      reelId || postId,
+    );
 
     return res.status(201).json({
       success: true,
       message: "Comment added",
-      data: null,
+      data: { id: commentId },
     });
   } catch (error) {
     console.error("Comment error:", error);

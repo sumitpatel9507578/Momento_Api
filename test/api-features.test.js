@@ -388,6 +388,14 @@ async function fakeQuery(sql, params = []) {
     return [existing ? [{ id: existing.id }] : [], []];
   }
 
+  if (/^SELECT user_id FROM (posts|reels) WHERE id = \?/i.test(normalizedSql)) {
+    return [[{ user_id: 11 }], []];
+  }
+
+  if (normalizedSql.startsWith("INSERT INTO notifications")) {
+    return [{ insertId: 1, affectedRows: 1 }, []];
+  }
+
   if (normalizedSql.startsWith("INSERT INTO likes")) {
     const isReel = normalizedSql.includes("reel_id");
     storedLikes.push({
@@ -1484,4 +1492,19 @@ test("local health endpoint responds successfully", async () => {
   const response = await fetch(`${baseUrl}/health`);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).success, true);
+});
+
+test("new post, comment, story, notification, and auth routes validate IDs and required tokens", async () => {
+  assert.equal((await request("/api/posts/not-an-id")).status, 400);
+  assert.equal((await request("/api/comments/not-an-id/like", { method: "POST" })).status, 400);
+  assert.equal((await request("/api/comments/not-an-id", {
+    method: "PUT",
+    body: JSON.stringify({ comment: "Updated text" }),
+  })).status, 400);
+  assert.equal((await request("/api/stories/not-an-id/view", { method: "PUT" })).status, 400);
+  assert.equal((await request("/api/notifications/not-an-id/read", { method: "PUT" })).status, 400);
+  assert.equal((await request("/api/auth/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })).status, 400);
 });

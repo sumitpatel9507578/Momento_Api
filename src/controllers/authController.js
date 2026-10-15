@@ -205,6 +205,22 @@ async function forgotPassword(req, res) {
   if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ success: false, message: "A valid email is required" });
   }
+  const deliveryUrl = process.env.PASSWORD_RESET_WEBHOOK_URL;
+  if (!deliveryUrl) {
+    return res.status(503).json({
+      success: false,
+      message: "Password reset delivery is not configured",
+    });
+  }
+  let parsedDeliveryUrl;
+  try {
+    parsedDeliveryUrl = new URL(deliveryUrl);
+  } catch {
+    return res.status(500).json({ success: false, message: "Password reset delivery is misconfigured" });
+  }
+  if (process.env.NODE_ENV === "production" && parsedDeliveryUrl.protocol !== "https:") {
+    return res.status(500).json({ success: false, message: "Password reset delivery must use HTTPS" });
+  }
   try {
     const user = await userModel.getUserByEmail(email);
     if (user) {
@@ -216,9 +232,27 @@ async function forgotPassword(req, res) {
          VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))`,
         [user.id, tokenHash],
       );
-      // Delivery is intentionally delegated to a configured mail service; never expose reset tokens in API responses.
-      if (process.env.NODE_ENV !== "production" && process.env.PASSWORD_RESET_LOG_TOKEN === "true") {
-        console.info(`[AUTH] Password reset token for user ${user.id}: ${resetToken}`);
+      try {
+        const response = await fetch(parsedDeliveryUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(process.env.PASSWORD_RESET_WEBHOOK_SECRET
+              ? { Authorization: `Bearer ${process.env.PASSWORD_RESET_WEBHOOK_SECRET}` }
+              : {}),
+          },
+          body: JSON.stringify({ email, resetToken, expiresInMinutes: 60 }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) {
+          throw new Error(`Reset delivery returned HTTP ${response.status}`);
+        }
+      } catch (error) {
+        await db.query(
+          "DELETE FROM password_reset_tokens WHERE user_id = ? AND token_hash = ?",
+          [user.id, tokenHash],
+        );
+        throw error;
       }
     }
     return res.json({
@@ -227,7 +261,7 @@ async function forgotPassword(req, res) {
     });
   } catch (error) {
     console.error("Forgot password error:", error);
-    return res.status(500).json({ success: false, message: "Failed to process password reset request" });
+    return res.status(502).json({ success: false, message: "Password reset delivery failed" });
   }
 }
 
