@@ -11,6 +11,10 @@ const storyRoutes = require("./routes/storyRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const savedItemRoutes = require("./routes/savedItemRoutes");
+const closeFriendRoutes = require("./routes/closeFriendRoutes");
+const searchRoutes = require("./routes/searchRoutes");
+const exploreController = require("./controllers/exploreController");
+const commentRoutes = require("./routes/commentRoutes");
 
 const app = express();
 
@@ -21,13 +25,18 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/follows", followRoutes);
+app.use("/api/close-friends", closeFriendRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/likes", likeRoutes);
 app.use("/api/reels", reelRoutes);
 app.use("/api/stories", storyRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/comments", commentRoutes);
 app.use("/api/saved-items", savedItemRoutes);
+app.use("/api/saved", savedItemRoutes);
+app.use("/api/search", searchRoutes);
+app.get("/api/explore", require("./middleware/authMiddleware"), exploreController.getExplore);
 
 // Provide a lightweight endpoint for Render health checks
 app.get("/health", (req, res) => {

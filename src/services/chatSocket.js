@@ -5,6 +5,7 @@ const userModel = require("../models/userModel");
 
 const USER_ROOM_PREFIX = "user:";
 const onlineUsers = new Map();
+const onlineVisibility = new Map();
 
 function parseUserId(value) {
   const id = Number(value);
@@ -25,6 +26,7 @@ function attachChatSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: { origin: true, methods: ["GET", "POST"] },
   });
+  attachChatSocket.io = io;
 
   io.use(async (socket, next) => {
     const token =
@@ -37,10 +39,12 @@ function attachChatSocket(httpServer) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const userId = parseUserId(decoded.id);
-      if (!userId || !(await userModel.getUserById(userId))) {
+      const user = userId ? await userModel.getUserById(userId) : null;
+      if (!user) {
         return next(new Error("ACCOUNT_NOT_FOUND"));
       }
       socket.data.userId = userId;
+      socket.data.activityVisible = user.showActivityStatus !== false;
       return next();
     } catch (error) {
       return next(
@@ -60,9 +64,16 @@ function attachChatSocket(httpServer) {
     onlineUsers.set(userId, userSockets);
     socket.join(userRoom);
 
-    socket.emit("presence:snapshot", [...onlineUsers.keys()]);
-    if (becameOnline) {
+    socket.emit(
+      "presence:snapshot",
+      [...onlineUsers.keys()].filter((id) => id === userId || onlineVisibility.get(id) !== false),
+    );
+    if (becameOnline && socket.data.activityVisible) {
+      onlineVisibility.set(userId, true);
+      io.emit("presence:online", { userId });
       io.emit("presence:update", { userId, isOnline: true });
+    } else if (becameOnline) {
+      onlineVisibility.set(userId, false);
     }
 
     socket.on("chat:join", async (payload, acknowledge = () => {}) => {
@@ -79,6 +90,7 @@ function attachChatSocket(httpServer) {
             message: "Chat user was not found on this server",
           });
         }
+        socket.join(`chat:${[userId, peerId].sort((a, b) => a - b).join(":")}`);
         return acknowledge({ success: true });
       } catch (error) {
         console.error("Socket chat join error:", error);
@@ -87,6 +99,10 @@ function attachChatSocket(httpServer) {
           message: "Could not open this conversation",
         });
       }
+    });
+
+    socket.on("presence:ping", (acknowledge = () => {}) => {
+      if (typeof acknowledge === "function") acknowledge({ success: true, timestamp: Date.now() });
     });
 
     socket.on("chat:send", async (payload, acknowledge = () => {}) => {
@@ -211,12 +227,34 @@ function attachChatSocket(httpServer) {
       connectedSockets.delete(socket.id);
       if (connectedSockets.size === 0) {
         onlineUsers.delete(userId);
-        io.emit("presence:update", { userId, isOnline: false });
+        const wasVisible = onlineVisibility.get(userId) !== false;
+        onlineVisibility.delete(userId);
+        if (wasVisible) {
+          io.emit("presence:offline", { userId });
+          io.emit("presence:update", { userId, isOnline: false });
+        }
       }
     });
   });
 
   return io;
 }
+
+attachChatSocket.getOnlineUserIds = () => [...onlineUsers.keys()];
+attachChatSocket.setActivityVisibility = (userId, isVisible) => {
+  if (!onlineUsers.has(userId)) return;
+  const wasVisible = onlineVisibility.get(userId) !== false;
+  onlineVisibility.set(userId, isVisible);
+  if (wasVisible === isVisible) return;
+  const io = attachChatSocket.io;
+  if (!io) return;
+  if (isVisible) {
+    io.emit("presence:online", { userId });
+    io.emit("presence:update", { userId, isOnline: true });
+  } else {
+    io.emit("presence:offline", { userId });
+    io.emit("presence:update", { userId, isOnline: false });
+  }
+};
 
 module.exports = attachChatSocket;

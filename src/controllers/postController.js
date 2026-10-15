@@ -8,7 +8,8 @@ async function getFeed(req, res) {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    const posts = await postModel.getFeed(limit, offset, req.user.id);
+    const followingOnly = ["true", "1"].includes(String(req.query.following || "").toLowerCase());
+    const posts = await postModel.getFeed(limit, offset, req.user.id, followingOnly);
 
     return res.status(200).json({
       success: true,
@@ -40,6 +41,21 @@ async function getUserPosts(req, res) {
       message: "Failed to fetch user posts",
       data: [],
     });
+  }
+}
+
+async function getPost(req, res) {
+  const postId = Number(req.params.postId);
+  if (!Number.isSafeInteger(postId) || postId <= 0) {
+    return res.status(400).json({ success: false, message: "A valid post ID is required" });
+  }
+  try {
+    const post = await postModel.getPostById(postId, Number(req.user.id));
+    if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+    return res.json({ success: true, data: post });
+  } catch (error) {
+    console.error("Get post error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch post" });
   }
 }
 
@@ -239,7 +255,13 @@ async function createComment(req, res) {
         .json({ success: false, message: "Comment is required" });
     }
 
-    await postModel.createComment(req.user.id, postId, comment, reelId);
+    const parentCommentId = req.body.parentCommentId == null
+      ? null
+      : Number(req.body.parentCommentId);
+    if (parentCommentId !== null && (!Number.isSafeInteger(parentCommentId) || parentCommentId <= 0)) {
+      return res.status(400).json({ success: false, message: "parentCommentId must be a positive integer" });
+    }
+    await postModel.createComment(req.user.id, postId, comment, reelId, parentCommentId);
 
     return res.status(201).json({
       success: true,
@@ -283,6 +305,7 @@ async function getComments(req, res) {
 module.exports = {
   getFeed,
   getUserPosts,
+  getPost,
   updatePost,
   deletePost,
   createPost,

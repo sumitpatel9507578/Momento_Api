@@ -162,7 +162,7 @@ async function deleteReel(req, res) {
 // Get active stories
 async function getStories(req, res) {
   try {
-    const stories = await postModel.getActiveStories();
+    const stories = await postModel.getActiveStories(Number(req.user.id));
     return res.status(200).json({
       success: true,
       message: "Stories fetched successfully",
@@ -179,7 +179,10 @@ async function getStories(req, res) {
 // Create a story
 async function createStory(req, res) {
   try {
-    const { mediaType, caption, expiresAt } = req.body;
+    const {
+      mediaType, caption, expiresAt, layers, selectedMusic, mentions,
+      isAiGenerated, audience, hideFromUserIds, allowReplies, allowSharing, altText,
+    } = req.body;
     let mediaUrl = req.body.mediaUrl;
     const uploadedFile = req.file || req.files?.story?.[0] || req.files?.media?.[0];
     let resolvedMediaType = mediaType || "image";
@@ -230,6 +233,30 @@ async function createStory(req, res) {
         message: "mediaType must be image or video",
       });
     }
+    const parsedLayers = typeof layers === "string" ? JSON.parse(layers) : (layers || []);
+    const parsedMentions = typeof mentions === "string" ? JSON.parse(mentions) : (mentions || []);
+    const parsedHiddenIds = typeof hideFromUserIds === "string"
+      ? JSON.parse(hideFromUserIds)
+      : (hideFromUserIds || []);
+    if (!Array.isArray(parsedLayers) || !Array.isArray(parsedMentions) || !Array.isArray(parsedHiddenIds)) {
+      return res.status(400).json({ success: false, message: "layers, mentions, and hideFromUserIds must be arrays" });
+    }
+    if (!["followers", "close_friends"].includes(audience || "followers")) {
+      return res.status(400).json({ success: false, message: "audience must be followers or close_friends" });
+    }
+    const relatedUserIds = [...parsedMentions, ...parsedHiddenIds].map(Number);
+    if (relatedUserIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      return res.status(400).json({ success: false, message: "mentions and hideFromUserIds must contain valid user IDs" });
+    }
+    if (typeof isAiGenerated !== "undefined" && typeof isAiGenerated !== "boolean") {
+      return res.status(400).json({ success: false, message: "isAiGenerated must be a boolean" });
+    }
+    if (typeof allowReplies !== "undefined" && typeof allowReplies !== "boolean") {
+      return res.status(400).json({ success: false, message: "allowReplies must be a boolean" });
+    }
+    if (typeof allowSharing !== "undefined" && typeof allowSharing !== "boolean") {
+      return res.status(400).json({ success: false, message: "allowSharing must be a boolean" });
+    }
 
     if (
       caption !== undefined &&
@@ -272,6 +299,17 @@ async function createStory(req, res) {
       resolvedMediaType,
       caption,
       expiration,
+      {
+        layers: parsedLayers,
+        selectedMusic,
+        mentions: parsedMentions,
+        isAiGenerated,
+        audience,
+        hideFromUserIds: parsedHiddenIds,
+        allowReplies,
+        allowSharing,
+        altText,
+      },
     );
 
     return res.status(201).json({
@@ -287,6 +325,36 @@ async function createStory(req, res) {
   }
 }
 
+async function viewStory(req, res) {
+  const storyId = Number(req.params.storyId);
+  if (!Number.isSafeInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ success: false, message: "A valid story ID is required" });
+  }
+  try {
+    const viewed = await postModel.markStoryViewed(storyId, Number(req.user.id));
+    if (!viewed) return res.status(404).json({ success: false, message: "Active story not found" });
+    return res.json({ success: true, message: "Story marked as viewed" });
+  } catch (error) {
+    console.error("Mark story viewed error:", error);
+    return res.status(500).json({ success: false, message: "Failed to mark story as viewed" });
+  }
+}
+
+async function deleteStory(req, res) {
+  const storyId = Number(req.params.storyId);
+  if (!Number.isSafeInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ success: false, message: "A valid story ID is required" });
+  }
+  try {
+    const deleted = await postModel.deleteStory(storyId, Number(req.user.id));
+    if (!deleted) return res.status(404).json({ success: false, message: "Story not found" });
+    return res.json({ success: true, message: "Story deleted successfully" });
+  } catch (error) {
+    console.error("Delete story error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete story" });
+  }
+}
+
 module.exports = {
   getReels,
   getReel,
@@ -295,4 +363,6 @@ module.exports = {
   deleteReel,
   getStories,
   createStory,
+  viewStory,
+  deleteStory,
 };

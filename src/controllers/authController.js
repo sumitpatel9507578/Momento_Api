@@ -1,6 +1,8 @@
 const bcrypt = require("bcryptjs");
+const crypto = require("node:crypto");
 const jwt = require("jsonwebtoken");
 const userModel = require("../models/userModel");
+const db = require("../config/db");
 
 async function register(req, res) {
   console.log(
@@ -136,4 +138,96 @@ async function login(req, res) {
   }
 }
 
-module.exports = { register, login };
+async function refresh(req, res) {
+  const { refreshToken } = req.body || {};
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return res.status(400).json({ success: false, message: "refreshToken is required" });
+  }
+  try {
+    const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    if (!secret) throw new Error("JWT refresh secret is not configured");
+    const decoded = jwt.verify(refreshToken, secret);
+    const user = await userModel.getUserById(decoded.id);
+    const [rows] = await db.query(
+      "SELECT refresh_token FROM users WHERE id = ?",
+      [decoded.id],
+    );
+    if (!user || !rows[0]?.refresh_token || rows[0].refresh_token !== refreshToken) {
+      return res.status(401).json({ success: false, message: "Invalid refresh token" });
+    }
+    const accessToken = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      process.env.JWT_SECRET || "momento_fallback_secret",
+      { expiresIn: "7d" },
+    );
+    const rotatedRefreshToken = jwt.sign(
+      { id: user.id, username: user.username },
+      secret,
+      { expiresIn: "30d" },
+    );
+    await userModel.saveAuthTokens(user.id, accessToken, rotatedRefreshToken);
+    return res.json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: { token: accessToken, refreshToken: rotatedRefreshToken },
+    });
+  } catch (error) {
+    if (error.name === "TokenExpiredError" || error.name === "JsonWebTokenError") {
+      return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });
+    }
+    console.error("Refresh token error:", error);
+    return res.status(500).json({ success: false, message: "Failed to refresh token" });
+  }
+}
+
+async function logout(req, res) {
+  const { refreshToken } = req.body || {};
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return res.status(400).json({ success: false, message: "refreshToken is required" });
+  }
+  try {
+    const [result] = await db.query(
+      "UPDATE users SET access_token = NULL, refresh_token = NULL WHERE id = ? AND refresh_token = ?",
+      [req.user.id, refreshToken],
+    );
+    if (!result.affectedRows) {
+      return res.status(401).json({ success: false, message: "Invalid refresh token" });
+    }
+    return res.json({ success: true, message: "Logged out successfully" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    return res.status(500).json({ success: false, message: "Failed to log out" });
+  }
+}
+
+async function forgotPassword(req, res) {
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, message: "A valid email is required" });
+  }
+  try {
+    const user = await userModel.getUserByEmail(email);
+    if (user) {
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
+      await db.query(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))`,
+        [user.id, tokenHash],
+      );
+      // Delivery is intentionally delegated to a configured mail service; never expose reset tokens in API responses.
+      if (process.env.NODE_ENV !== "production" && process.env.PASSWORD_RESET_LOG_TOKEN === "true") {
+        console.info(`[AUTH] Password reset token for user ${user.id}: ${resetToken}`);
+      }
+    }
+    return res.json({
+      success: true,
+      message: "If an account exists for this email, password reset instructions will be sent.",
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({ success: false, message: "Failed to process password reset request" });
+  }
+}
+
+module.exports = { register, login, refresh, logout, forgotPassword };

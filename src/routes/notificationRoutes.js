@@ -3,5 +3,6 @@ const authMiddleware = require("../middleware/authMiddleware");
 const notificationController = require("../controllers/notificationController");
 
 router.get("/", authMiddleware, notificationController.getNotifications);
+router.put("/:id/read", authMiddleware, notificationController.markRead);
 
 module.exports = router;

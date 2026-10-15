@@ -1,5 +1,7 @@
 const userModel = require("../models/userModel");
 const followModel = require("../models/followModel");
+const db = require("../config/db");
+const chatSocket = require("../services/chatSocket");
 
 // Get a user's public profile
 async function getProfile(req, res) {
@@ -30,6 +32,7 @@ async function getProfile(req, res) {
       data: {
         ...user,
         isFollowing: Boolean(await followModel.getFollow(req.user.id, userId)),
+        stats: await getProfileStats(userId),
       },
     });
   } catch (error) {
@@ -92,6 +95,13 @@ async function updateProfile(req, res) {
       updates.username = String(req.body.username).trim().toLowerCase();
     }
     if (req.body.bio !== undefined) updates.bio = String(req.body.bio).trim();
+    if (req.body.website !== undefined) {
+      const website = String(req.body.website).trim();
+      if (website && (!/^https?:\/\//i.test(website) || website.length > 2048)) {
+        return res.status(400).json({ success: false, message: "website must be a valid HTTP or HTTPS URL" });
+      }
+      updates.website = website || null;
+    }
     const uploadedFile =
       req.file ||
       req.files?.profileImage?.[0] ||
@@ -102,6 +112,12 @@ async function updateProfile(req, res) {
       req.files?.media?.[0];
     if (uploadedFile) {
       updates.profileImage = uploadedFile.path;
+    } else if (req.body.profileImage !== undefined) {
+      const image = String(req.body.profileImage).trim();
+      if (image && (!/^https?:\/\//i.test(image) || image.length > 2048)) {
+        return res.status(400).json({ success: false, message: "profileImage must be a valid HTTP or HTTPS URL" });
+      }
+      updates.profileImage = image || null;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -169,9 +185,62 @@ async function searchUsers(req, res) {
   }
 }
 
+async function getProfileStats(userId) {
+  const [rows] = await db.query(
+    `SELECT
+       (SELECT COUNT(*) FROM posts WHERE user_id = ?) AS postsCount,
+       (SELECT COUNT(*) FROM reels WHERE user_id = ?) AS reelsCount,
+       (SELECT COUNT(*) FROM follows WHERE following_id = ?) AS followersCount,
+       (SELECT COUNT(*) FROM follows WHERE follower_id = ?) AS followingCount`,
+    [userId, userId, userId, userId],
+  );
+  return rows[0];
+}
+
+async function getOnline(req, res) {
+  const userId = Number(req.user?.id);
+  try {
+    const [rows] = await db.query(
+      `SELECT DISTINCT f.follower_id AS userId
+       FROM follows f JOIN users u ON u.id = f.follower_id
+       WHERE f.following_id = ? AND u.show_activity_status = 1
+       UNION
+       SELECT DISTINCT f.following_id AS userId
+       FROM follows f JOIN users u ON u.id = f.following_id
+       WHERE f.follower_id = ? AND u.show_activity_status = 1`,
+      [userId, userId],
+    );
+    const onlineIds = new Set(chatSocket.getOnlineUserIds());
+    const data = rows
+      .filter((row) => onlineIds.has(Number(row.userId)))
+      .map((row) => Number(row.userId));
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error("Get online users error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch online users" });
+  }
+}
+
+async function updateActivityStatus(req, res) {
+  const enabled = req.body?.show_activity_status;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ success: false, message: "show_activity_status must be a boolean" });
+  }
+  try {
+    await db.query("UPDATE users SET show_activity_status = ? WHERE id = ?", [enabled, req.user.id]);
+    chatSocket.setActivityVisibility(Number(req.user.id), enabled);
+    return res.json({ success: true, data: { show_activity_status: enabled } });
+  } catch (error) {
+    console.error("Update activity status error:", error);
+    return res.status(500).json({ success: false, message: "Failed to update activity status" });
+  }
+}
+
 module.exports = {
   getProfile,
   getMe,
   updateProfile,
   searchUsers,
+  getOnline,
+  updateActivityStatus,
 };

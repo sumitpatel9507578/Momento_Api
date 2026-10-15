@@ -4,8 +4,16 @@ const userController = require("../controllers/userController");
 const followController = require("../controllers/followController");
 const upload = require("../middleware/uploadMiddleware");
 
+router.get("/online", authMiddleware, userController.getOnline);
 router.get("/me", authMiddleware, userController.getMe);
 router.get("/search", authMiddleware, userController.searchUsers);
+router.put("/profile", authMiddleware, upload.fields([
+  { name: "profileImage", maxCount: 1 },
+  { name: "profile_image", maxCount: 1 },
+  { name: "image", maxCount: 1 },
+]), userController.updateProfile);
+router.put("/activity-status", authMiddleware, userController.updateActivityStatus);
+router.post("/:userId/follow", authMiddleware, followController.followUser);
 router.get("/:userId", authMiddleware, userController.getProfile);
 router.get("/profile/:userId", authMiddleware, userController.getProfile);
 router.get("/:userId/followers", authMiddleware, followController.getFollowers);

@@ -128,6 +128,15 @@ async function fakeQuery(sql, params = []) {
     ];
   }
 
+  if (normalizedSql.startsWith("SELECT (SELECT COUNT(*) FROM posts WHERE user_id = ?)")) {
+    return [[{
+      postsCount: 0,
+      reelsCount: 0,
+      followersCount: 0,
+      followingCount: 0,
+    }], []];
+  }
+
   if (normalizedSql.startsWith("SELECT post_id FROM saved_posts")) {
     const existing = savedPosts.find(
       (bookmark) =>

@@ -4,6 +4,8 @@ const contentController = require("../controllers/contentController");
 const upload = require("../middleware/uploadMiddleware");
 
 router.get("/", authMiddleware, contentController.getStories);
+router.put("/:storyId/view", authMiddleware, contentController.viewStory);
+router.delete("/:storyId", authMiddleware, contentController.deleteStory);
 router.post(
   "/",
   authMiddleware,

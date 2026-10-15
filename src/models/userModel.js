@@ -80,6 +80,10 @@ async function getUserById(id) {
     name: user.full_name || user.name || "",
     bio: user.bio || "",
     profileImage: user.profile_image || user.profileImage || "",
+    website: user.website || "",
+    showActivityStatus: user.show_activity_status === undefined
+      ? true
+      : Boolean(user.show_activity_status),
     role: user.role || "user",
     profileCompleted: Boolean(user.profile_completed),
     createdAt: user.created_at || user.createdAt || null,
@@ -94,12 +98,28 @@ async function getUserByUsername(username) {
 }
 
 async function searchUsers(query) {
+  const cols = await getTableInfo();
+  const nameColumn = cols.includes("full_name")
+    ? "full_name"
+    : cols.includes("name")
+      ? "name"
+      : null;
+  const profileColumn = cols.includes("profile_image")
+    ? "profile_image"
+    : cols.includes("profileImage")
+      ? "profileImage"
+      : null;
+  const nameSelect = nameColumn ? `${nameColumn}` : "''";
+  const imageSelect = profileColumn ? `${profileColumn}` : "NULL";
+  const nameFilter = nameColumn ? ` OR ${nameColumn} LIKE ?` : "";
+  const params = [`%${query}%`];
+  if (nameColumn) params.push(`%${query}%`);
   const [rows] = await db.query(
-    `SELECT id, username, full_name AS name, profileImage AS profile_image
+    `SELECT id, username, ${nameSelect} AS name, ${imageSelect} AS profile_image
      FROM users
-     WHERE username LIKE ? OR full_name LIKE ?
+     WHERE username LIKE ?${nameFilter}
      LIMIT 20`,
-    [`%${query}%`, `%${query}%`],
+    params,
   );
   return rows.map((user) => ({
     id: user.id,
@@ -120,6 +140,8 @@ async function updateUser(id, updates) {
       dbKey = cols.includes("full_name") ? "full_name" : "name";
     if (key === "username") dbKey = "username";
     if (key === "bio") dbKey = "bio";
+    if (key === "website") dbKey = "website";
+    if (key === "showActivityStatus") dbKey = "show_activity_status";
     if (key === "profileImage" || key === "profile_image")
       dbKey = cols.includes("profile_image") ? "profile_image" : "profileImage";
 

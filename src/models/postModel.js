@@ -22,15 +22,23 @@ async function createPost(userId, caption, mediaUrl, mediaType) {
   return getPostById(result.insertId);
 }
 
-async function getPostById(postId) {
+async function getPostById(postId, viewerId = null) {
   const [rows] = await db.query(
-    `SELECT p.*, u.username, u.full_name, u.profileImage FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ?`,
-    [postId],
+    `SELECT p.*, u.username, u.full_name, u.profileImage,
+            (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS likesCount,
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS commentsCount,
+            EXISTS (SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) AS isLiked,
+            EXISTS (SELECT 1 FROM saved_posts WHERE post_id = p.id AND user_id = ?) AS isSaved
+     FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ?`,
+    [viewerId, viewerId, postId],
   );
   return _mapPost(rows[0]);
 }
 
-async function getFeed(limit = 20, offset = 0, viewerId = null) {
+async function getFeed(limit = 20, offset = 0, viewerId = null, followingOnly = false) {
+  const followFilter = followingOnly
+    ? "AND (p.user_id = ? OR EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = p.user_id))"
+    : "";
   const [rows] = await db.query(
     `SELECT p.*, u.username, u.full_name AS name, u.profileImage AS profile_image,
      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likesCount,
@@ -45,9 +53,12 @@ async function getFeed(limit = 20, offset = 0, viewerId = null) {
      ) AS isSaved
      FROM posts p
      JOIN users u ON p.user_id = u.id
+     WHERE 1 = 1 ${followFilter}
      ORDER BY p.created_at DESC
      LIMIT ?, ?`,
-    [viewerId, viewerId, offset, limit],
+    followingOnly
+      ? [viewerId, viewerId, viewerId, viewerId, offset, limit]
+      : [viewerId, viewerId, offset, limit],
   );
   return rows.map(_mapPost);
 }
@@ -221,7 +232,7 @@ async function deletePost(postId, userId) {
   }
 }
 
-async function createComment(userId, postId, comment, reelId = null) {
+async function createComment(userId, postId, comment, reelId = null, parentCommentId = null) {
   const cols = await getTableCols("comments");
   const valueColumns = [
     cols.includes("userId") ? "userId" : "user_id",
@@ -238,11 +249,21 @@ async function createComment(userId, postId, comment, reelId = null) {
     valueColumns.splice(1, 1, reelIdCol);
     values.splice(1, 1, reelId);
   }
+  if (parentCommentId !== null) {
+    if (!cols.includes("parent_comment_id")) {
+      const error = new Error("Nested comments require the comments parent_comment_id migration");
+      error.code = "NESTED_COMMENTS_MIGRATION_REQUIRED";
+      throw error;
+    }
+    valueColumns.push("parent_comment_id");
+    values.push(parentCommentId);
+  }
 
-  await db.query(
+  const [result] = await db.query(
     `INSERT INTO comments (${valueColumns.join(", ")}) VALUES (${valueColumns.map(() => "?").join(", ")})`,
     values,
   );
+  return result.insertId;
 }
 
 async function getCommentsByPostId(postId) {
@@ -332,7 +353,7 @@ async function deleteReel(reelId, userId) {
 }
 
 // --- Stories ---
-async function createStory(userId, mediaUrl, mediaType, caption, expiresAt) {
+async function createStory(userId, mediaUrl, mediaType, caption, expiresAt, options = {}) {
   const cols = await getTableCols("stories");
   const requiredColumns = [
     "user_id",
@@ -350,14 +371,42 @@ async function createStory(userId, mediaUrl, mediaType, caption, expiresAt) {
     );
   }
 
+  const storyColumns = [
+    "user_id", "media_url", "media_type", "caption", "expires_at",
+    "layers", "selected_music", "is_ai_generated", "audience",
+    "allow_replies", "allow_sharing", "alt_text",
+  ];
+  const storyValues = [
+    userId, mediaUrl, mediaType, caption, expiresAt,
+    JSON.stringify(options.layers || []), options.selectedMusic || null,
+    Boolean(options.isAiGenerated), options.audience || "followers",
+    options.allowReplies !== false, options.allowSharing !== false,
+    options.altText || null,
+  ];
   const [result] = await db.query(
-    `INSERT INTO stories (user_id, media_url, media_type, caption, expires_at) VALUES (?, ?, ?, ?, ?)`,
-    [userId, mediaUrl, mediaType, caption, expiresAt],
+    `INSERT INTO stories (${storyColumns.join(", ")}) VALUES (${storyColumns.map(() => "?").join(", ")})`,
+    storyValues,
   );
+  const hiddenIds = [...new Set((options.hideFromUserIds || []).map(Number))];
+  if (hiddenIds.length) {
+    await db.query(
+      `INSERT INTO story_hidden_users (story_id, user_id)
+       VALUES ${hiddenIds.map(() => "(?, ?)").join(", ")}`,
+      hiddenIds.flatMap((hiddenId) => [result.insertId, hiddenId]),
+    );
+  }
+  const mentionIds = [...new Set((options.mentions || []).map(Number))];
+  if (mentionIds.length) {
+    await db.query(
+      `INSERT INTO story_mentions (story_id, user_id)
+       VALUES ${mentionIds.map(() => "(?, ?)").join(", ")}`,
+      mentionIds.flatMap((mentionedId) => [result.insertId, mentionedId]),
+    );
+  }
   return result.insertId;
 }
 
-async function getActiveStories() {
+async function getActiveStories(viewerId) {
   const storyCols = await getTableCols("stories");
   const requiredColumns = ["user_id", "media_url", "media_type", "expires_at"];
   const missingColumns = requiredColumns.filter(
@@ -387,7 +436,24 @@ async function getActiveStories() {
      FROM stories s
      JOIN users u ON u.id = s.user_id
      WHERE s.expires_at > NOW()
+       AND (
+         s.user_id = ?
+         OR (
+           EXISTS (SELECT 1 FROM follows f
+                   WHERE f.follower_id = ? AND f.following_id = s.user_id)
+           AND (
+             COALESCE(s.audience, 'followers') = 'followers'
+             OR EXISTS (SELECT 1 FROM close_friends cf
+                        WHERE cf.user_id = s.user_id AND cf.friend_id = ?)
+           )
+         )
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM story_hidden_users shu
+         WHERE shu.story_id = s.id AND shu.user_id = ?
+       )
      ORDER BY s.created_at DESC, s.id DESC`,
+    [viewerId, viewerId, viewerId, viewerId],
   );
   return rows.map((s) => ({
     ...s,
@@ -397,6 +463,27 @@ async function getActiveStories() {
     expiresAt: s.expires_at,
     profileImage: s.profile_image || "",
   }));
+}
+
+async function markStoryViewed(storyId, viewerId) {
+  const [rows] = await db.query(
+    "SELECT id, user_id FROM stories WHERE id = ? AND expires_at > NOW()",
+    [storyId],
+  );
+  if (!rows[0]) return false;
+  await db.query(
+    "INSERT INTO story_views (story_id, user_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE viewed_at = CURRENT_TIMESTAMP",
+    [storyId, viewerId],
+  );
+  return true;
+}
+
+async function deleteStory(storyId, userId) {
+  const [result] = await db.query(
+    "DELETE FROM stories WHERE id = ? AND user_id = ?",
+    [storyId, userId],
+  );
+  return result.affectedRows > 0;
 }
 
 const MESSAGE_TYPES = ["text", "image", "video", "audio", "file", "reel"];
@@ -689,6 +776,8 @@ module.exports = {
   deleteReel,
   createStory,
   getActiveStories,
+  markStoryViewed,
+  deleteStory,
   createMessage,
   getMessages,
   markMessagesRead,
