@@ -294,12 +294,13 @@ async function createComment(req, res) {
 async function getComments(req, res) {
   try {
     const { postId, reelId } = req.params;
+    const viewerId = req.user?.id || null;
     let comments;
 
     if (postId) {
-      comments = await postModel.getCommentsByPostId(postId);
+      comments = await postModel.getCommentsByPostId(postId, viewerId);
     } else if (reelId) {
-      comments = await postModel.getCommentsByReelId(reelId);
+      comments = await postModel.getCommentsByReelId(reelId, viewerId);
     } else {
       return res
         .status(400)

@@ -276,18 +276,30 @@ async function createComment(userId, postId, comment, reelId = null, parentComme
   return result.insertId;
 }
 
-async function getCommentsByPostId(postId) {
+async function getCommentsByPostId(postId, viewerId = null) {
   const [rows] = await db.query(
-    `SELECT c.*, u.username, u.profileImage FROM comments c JOIN users u ON c.user_id = u.id WHERE c.post_id = ? ORDER BY c.id DESC`,
-    [postId],
+    `SELECT c.*, u.username, u.profileImage, u.full_name,
+            (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
+            EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
+     FROM comments c
+     JOIN users u ON c.user_id = u.id
+     WHERE c.post_id = ?
+     ORDER BY c.id DESC`,
+    [viewerId, postId],
   );
   return rows;
 }
 
-async function getCommentsByReelId(reelId) {
+async function getCommentsByReelId(reelId, viewerId = null) {
   const [rows] = await db.query(
-    `SELECT c.*, u.username, u.profileImage, u.profile_image FROM comments c JOIN users u ON (c.userId = u.id OR c.user_id = u.id) WHERE c.reelId = ? OR c.reel_id = ? ORDER BY c.id DESC`,
-    [reelId, reelId],
+    `SELECT c.*, u.username, u.profileImage, u.profile_image, u.full_name,
+            (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
+            EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
+     FROM comments c
+     JOIN users u ON (c.userId = u.id OR c.user_id = u.id)
+     WHERE c.reelId = ? OR c.reel_id = ?
+     ORDER BY c.id DESC`,
+    [viewerId, reelId, reelId],
   );
   return rows;
 }
