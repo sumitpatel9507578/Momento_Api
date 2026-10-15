@@ -9,5 +9,6 @@ router.post("/login", c.login);
 router.post("/refresh", c.refresh);
 router.post("/logout", authMiddleware, c.logout);
 router.post("/forgot-password", c.forgotPassword);
+router.post("/reset-password", c.resetPassword);
 
 module.exports = router;

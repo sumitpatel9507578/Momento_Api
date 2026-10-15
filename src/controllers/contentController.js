@@ -1,5 +1,6 @@
 const postModel = require("../models/postModel");
 const userModel = require("../models/userModel");
+const db = require("../config/db");
 
 // Get reels feed
 async function getReels(req, res) {
@@ -233,11 +234,18 @@ async function createStory(req, res) {
         message: "mediaType must be image or video",
       });
     }
-    const parsedLayers = typeof layers === "string" ? JSON.parse(layers) : (layers || []);
-    const parsedMentions = typeof mentions === "string" ? JSON.parse(mentions) : (mentions || []);
-    const parsedHiddenIds = typeof hideFromUserIds === "string"
-      ? JSON.parse(hideFromUserIds)
-      : (hideFromUserIds || []);
+    let parsedLayers;
+    let parsedMentions;
+    let parsedHiddenIds;
+    try {
+      parsedLayers = typeof layers === "string" ? JSON.parse(layers) : (layers || []);
+      parsedMentions = typeof mentions === "string" ? JSON.parse(mentions) : (mentions || []);
+      parsedHiddenIds = typeof hideFromUserIds === "string"
+        ? JSON.parse(hideFromUserIds)
+        : (hideFromUserIds || []);
+    } catch {
+      return res.status(400).json({ success: false, message: "layers, mentions, and hideFromUserIds must contain valid JSON" });
+    }
     if (!Array.isArray(parsedLayers) || !Array.isArray(parsedMentions) || !Array.isArray(parsedHiddenIds)) {
       return res.status(400).json({ success: false, message: "layers, mentions, and hideFromUserIds must be arrays" });
     }
@@ -248,14 +256,22 @@ async function createStory(req, res) {
     if (relatedUserIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
       return res.status(400).json({ success: false, message: "mentions and hideFromUserIds must contain valid user IDs" });
     }
-    if (typeof isAiGenerated !== "undefined" && typeof isAiGenerated !== "boolean") {
+    const parseBoolean = (value) => value === "true" ? true : value === "false" ? false : value;
+    const aiGenerated = parseBoolean(isAiGenerated);
+    const repliesAllowed = parseBoolean(allowReplies);
+    const sharingAllowed = parseBoolean(allowSharing);
+    if (typeof aiGenerated !== "undefined" && typeof aiGenerated !== "boolean") {
       return res.status(400).json({ success: false, message: "isAiGenerated must be a boolean" });
     }
-    if (typeof allowReplies !== "undefined" && typeof allowReplies !== "boolean") {
+    if (typeof repliesAllowed !== "undefined" && typeof repliesAllowed !== "boolean") {
       return res.status(400).json({ success: false, message: "allowReplies must be a boolean" });
     }
-    if (typeof allowSharing !== "undefined" && typeof allowSharing !== "boolean") {
+    if (typeof sharingAllowed !== "undefined" && typeof sharingAllowed !== "boolean") {
       return res.status(400).json({ success: false, message: "allowSharing must be a boolean" });
+    }
+    if ((selectedMusic != null && (typeof selectedMusic !== "string" || selectedMusic.length > 255)) ||
+        (altText != null && (typeof altText !== "string" || altText.length > 500))) {
+      return res.status(400).json({ success: false, message: "selectedMusic or altText is invalid" });
     }
 
     if (
@@ -292,6 +308,16 @@ async function createStory(req, res) {
         message: "Authenticated user not found",
       });
     }
+    if (relatedUserIds.length) {
+      const uniqueIds = [...new Set(relatedUserIds)];
+      const [relatedUsers] = await db.query(
+        `SELECT id FROM users WHERE id IN (${uniqueIds.map(() => "?").join(", ")})`,
+        uniqueIds,
+      );
+      if (relatedUsers.length !== uniqueIds.length) {
+        return res.status(400).json({ success: false, message: "mentions and hideFromUserIds must reference existing users" });
+      }
+    }
 
     const storyId = await postModel.createStory(
       userId,
@@ -303,11 +329,11 @@ async function createStory(req, res) {
         layers: parsedLayers,
         selectedMusic,
         mentions: parsedMentions,
-        isAiGenerated,
+        isAiGenerated: aiGenerated,
         audience,
         hideFromUserIds: parsedHiddenIds,
-        allowReplies,
-        allowSharing,
+        allowReplies: repliesAllowed,
+        allowSharing: sharingAllowed,
         altText,
       },
     );

@@ -208,6 +208,7 @@ async function forgotPassword(req, res) {
   try {
     const user = await userModel.getUserByEmail(email);
     if (user) {
+      await db.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [user.id]);
       const resetToken = crypto.randomBytes(32).toString("hex");
       const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
       await db.query(
@@ -230,4 +231,45 @@ async function forgotPassword(req, res) {
   }
 }
 
-module.exports = { register, login, refresh, logout, forgotPassword };
+async function resetPassword(req, res) {
+  const { token, password } = req.body || {};
+  if (typeof token !== "string" || !/^[a-f0-9]{64}$/i.test(token)) {
+    return res.status(400).json({ success: false, message: "A valid reset token is required" });
+  }
+  if (typeof password !== "string" || password.length < 8 || password.length > 128) {
+    return res.status(400).json({ success: false, message: "Password must be between 8 and 128 characters" });
+  }
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  let connection;
+  let transactionStarted = false;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const [rows] = await connection.query(
+      `SELECT id, user_id FROM password_reset_tokens
+       WHERE token_hash = ? AND expires_at > NOW() FOR UPDATE`,
+      [tokenHash],
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: "Reset token is invalid or expired" });
+    }
+    const passwordHash = await bcrypt.hash(password, 10);
+    await connection.query(
+      "UPDATE users SET password = ?, access_token = NULL, refresh_token = NULL WHERE id = ?",
+      [passwordHash, rows[0].user_id],
+    );
+    await connection.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [rows[0].user_id]);
+    await connection.commit();
+    return res.json({ success: true, message: "Password reset successfully" });
+  } catch (error) {
+    if (transactionStarted) await connection.rollback();
+    console.error("Reset password error:", error);
+    return res.status(500).json({ success: false, message: "Failed to reset password" });
+  } finally {
+    connection?.release();
+  }
+}
+
+module.exports = { register, login, refresh, logout, forgotPassword, resetPassword };
