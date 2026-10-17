@@ -22,7 +22,12 @@ const messageColumns = [
   "message",
   "message_type",
   "media_url",
+  "post_id",
+  "post_image_url",
+  "post_caption",
+  "post_owner_username",
   "is_read",
+  "read_at",
   "created_at",
 ];
 const storyColumns = [
@@ -35,12 +40,21 @@ const storyColumns = [
   "created_at",
 ];
 const likeColumns = ["id", "user_id", "post_id", "created_at"];
+const repostColumns = [
+  "id",
+  "user_id",
+  "post_id",
+  "reel_id",
+  "note",
+  "created_at",
+];
 let reelLikesEnabled = false;
 let reelMessagesEnabled = false;
 let chatIdempotencyEnabled = false;
 let storedMessages = [];
 let storedLikes = [];
 let storedStories = [];
+let storedReposts = [];
 let savedMessages = [];
 let savedReels = [];
 let savedPosts = [];
@@ -48,6 +62,7 @@ let savedItemsSchemaEnabled = true;
 let nextMessageId = 1;
 let lastConversationQuery = "";
 let nextStoryId = 1;
+let nextRepostId = 1;
 let nextQueryError = null;
 let server;
 let socketServer;
@@ -77,18 +92,19 @@ async function fakeQuery(sql, params = []) {
   }
   const table = normalizedSql.match(/^SHOW COLUMNS FROM (\w+)/i)?.[1];
   if (table === "messages") {
-    return columnRows(
-      [
-        ...messageColumns,
-        ...(reelMessagesEnabled ? ["reel_id"] : []),
-        ...(chatIdempotencyEnabled ? ["client_message_id"] : []),
-      ],
-    );
+    return columnRows([
+      ...messageColumns,
+      ...(reelMessagesEnabled ? ["reel_id"] : []),
+      ...(chatIdempotencyEnabled ? ["client_message_id"] : []),
+    ]);
   }
   if (table === "likes") {
-    return columnRows(reelLikesEnabled ? [...likeColumns, "reel_id"] : likeColumns);
+    return columnRows(
+      reelLikesEnabled ? [...likeColumns, "reel_id"] : likeColumns,
+    );
   }
   if (table === "stories") return columnRows(storyColumns);
+  if (table === "reposts") return columnRows(repostColumns);
   if (table === "users") {
     return columnRows(["id", "username", "full_name", "profile_image"]);
   }
@@ -128,13 +144,86 @@ async function fakeQuery(sql, params = []) {
     ];
   }
 
-  if (normalizedSql.startsWith("SELECT (SELECT COUNT(*) FROM posts WHERE user_id = ?)")) {
-    return [[{
-      postsCount: 0,
-      reelsCount: 0,
-      followersCount: 0,
-      followingCount: 0,
-    }], []];
+  if (normalizedSql.startsWith("SELECT * FROM reposts WHERE id = ?")) {
+    const repost = storedReposts.find((item) => item.id === Number(params[0]));
+    return [repost ? [{ ...repost }] : [], []];
+  }
+
+  if (normalizedSql.startsWith("SELECT * FROM reposts WHERE user_id = ? AND")) {
+    const isReel = normalizedSql.includes("reel_id = ?");
+    const repost = storedReposts.find(
+      (item) =>
+        item.user_id === Number(params[0]) &&
+        (isReel
+          ? item.reel_id === Number(params[1])
+          : item.post_id === Number(params[1])),
+    );
+    return [repost ? [{ ...repost }] : [], []];
+  }
+
+  if (
+    normalizedSql.startsWith("SELECT * FROM reposts WHERE user_id = ? ORDER BY")
+  ) {
+    const rows = storedReposts
+      .filter((item) => item.user_id === Number(params[0]))
+      .sort((left, right) => right.id - left.id)
+      .map((item) => ({ ...item }));
+    return [rows, []];
+  }
+
+  if (normalizedSql.startsWith("INSERT INTO reposts")) {
+    const [userId, postId, reelId, note] = params;
+    if (
+      storedReposts.some(
+        (item) =>
+          item.user_id === userId &&
+          ((postId != null && item.post_id === postId) ||
+            (reelId != null && item.reel_id === reelId)),
+      )
+    ) {
+      throw Object.assign(new Error("duplicate repost"), {
+        code: "ER_DUP_ENTRY",
+      });
+    }
+    const id = nextRepostId++;
+    storedReposts.push({
+      id,
+      user_id: userId,
+      post_id: postId,
+      reel_id: reelId,
+      note,
+      created_at: new Date(`2026-10-12T00:00:${String(id).padStart(2, "0")}Z`),
+    });
+    return [{ insertId: id, affectedRows: 1 }, []];
+  }
+
+  if (
+    normalizedSql.startsWith("DELETE FROM reposts WHERE id = ? AND user_id = ?")
+  ) {
+    const [repostId, userId] = params.map(Number);
+    const originalLength = storedReposts.length;
+    storedReposts = storedReposts.filter(
+      (item) => item.id !== repostId || item.user_id !== userId,
+    );
+    return [{ affectedRows: originalLength - storedReposts.length }, []];
+  }
+
+  if (
+    normalizedSql.startsWith(
+      "SELECT (SELECT COUNT(*) FROM posts WHERE user_id = ?)",
+    )
+  ) {
+    return [
+      [
+        {
+          postsCount: 0,
+          reelsCount: 0,
+          followersCount: 0,
+          followingCount: 0,
+        },
+      ],
+      [],
+    ];
   }
 
   if (normalizedSql.startsWith("SELECT post_id FROM saved_posts")) {
@@ -166,13 +255,14 @@ async function fakeQuery(sql, params = []) {
     const [userId, postId] = params.map(Number);
     const originalLength = savedPosts.length;
     savedPosts = savedPosts.filter(
-      (bookmark) =>
-        bookmark.user_id !== userId || bookmark.post_id !== postId,
+      (bookmark) => bookmark.user_id !== userId || bookmark.post_id !== postId,
     );
     return [{ affectedRows: originalLength - savedPosts.length }, []];
   }
 
-  const targetMatch = normalizedSql.match(/^SELECT id FROM (posts|reels) WHERE id = \?/);
+  const targetMatch = normalizedSql.match(
+    /^SELECT id FROM (posts|reels) WHERE id = \?/,
+  );
   if (targetMatch) {
     const id = Number(params[0]);
     return [id === 404 ? [] : [{ id }], []];
@@ -199,7 +289,9 @@ async function fakeQuery(sql, params = []) {
     ];
   }
 
-  if (normalizedSql.startsWith("SELECT id, sender_id, receiver_id FROM messages")) {
+  if (
+    normalizedSql.startsWith("SELECT id, sender_id, receiver_id FROM messages")
+  ) {
     const record = storedMessages.find(
       (message) => message.id === Number(params[0]),
     );
@@ -251,7 +343,11 @@ async function fakeQuery(sql, params = []) {
         code: "ER_DUP_ENTRY",
       });
     }
-    savedMessages.push({ user_id: userId, message_id: messageId, saved_at: new Date() });
+    savedMessages.push({
+      user_id: userId,
+      message_id: messageId,
+      saved_at: new Date(),
+    });
     return [{ affectedRows: 1 }, []];
   }
 
@@ -278,7 +374,8 @@ async function fakeQuery(sql, params = []) {
     const [userId, reelId] = params.map(Number);
     if (
       savedReels.some(
-        (bookmark) => bookmark.user_id === userId && bookmark.reel_id === reelId,
+        (bookmark) =>
+          bookmark.user_id === userId && bookmark.reel_id === reelId,
       )
     ) {
       throw Object.assign(new Error("duplicate saved reel"), {
@@ -298,7 +395,9 @@ async function fakeQuery(sql, params = []) {
     return [{ affectedRows: originalLength - savedReels.length }, []];
   }
 
-  if (normalizedSql.startsWith("SELECT m.id AS itemId, sm.saved_at AS savedAt")) {
+  if (
+    normalizedSql.startsWith("SELECT m.id AS itemId, sm.saved_at AS savedAt")
+  ) {
     const userId = Number(params[2]);
     return [
       savedMessages
@@ -308,7 +407,9 @@ async function fakeQuery(sql, params = []) {
             (entry) => entry.id === bookmark.message_id,
           );
           const conversationUserId =
-            message.sender_id === userId ? message.receiver_id : message.sender_id;
+            message.sender_id === userId
+              ? message.receiver_id
+              : message.sender_id;
           return {
             itemId: message.id,
             savedAt: bookmark.saved_at,
@@ -335,29 +436,33 @@ async function fakeQuery(sql, params = []) {
     ];
   }
 
-  if (normalizedSql.startsWith("SELECT p.id AS itemId, sp.saved_at AS savedAt")) {
+  if (
+    normalizedSql.startsWith("SELECT p.id AS itemId, sp.saved_at AS savedAt")
+  ) {
     return [
       savedPosts
         .filter((bookmark) => bookmark.user_id === Number(params[0]))
         .map((bookmark) => ({
-        itemType: "post",
-        itemId: bookmark.post_id,
-        savedAt: bookmark.saved_at,
-        userId: 11,
-        username: "post-owner",
-        name: "Post Owner",
-        profileImage: null,
-        mediaUrl: `https://cdn.example/posts/${bookmark.post_id}.jpg`,
-        mediaType: "image",
-        caption: `Post ${bookmark.post_id}`,
-        likesCount: 0,
-        commentsCount: 0,
+          itemType: "post",
+          itemId: bookmark.post_id,
+          savedAt: bookmark.saved_at,
+          userId: 11,
+          username: "post-owner",
+          name: "Post Owner",
+          profileImage: null,
+          mediaUrl: `https://cdn.example/posts/${bookmark.post_id}.jpg`,
+          mediaType: "image",
+          caption: `Post ${bookmark.post_id}`,
+          likesCount: 0,
+          commentsCount: 0,
         })),
       [],
     ];
   }
 
-  if (normalizedSql.startsWith("SELECT r.id AS itemId, sr.saved_at AS savedAt")) {
+  if (
+    normalizedSql.startsWith("SELECT r.id AS itemId, sr.saved_at AS savedAt")
+  ) {
     const userId = Number(params[0]);
     return [
       savedReels
@@ -421,11 +526,21 @@ async function fakeQuery(sql, params = []) {
   }
 
   if (normalizedSql.startsWith("INSERT INTO messages")) {
-    const [senderId, receiverId, message, messageType, mediaUrl] = params;
-    const reelId = normalizedSql.includes("reel_id") ? params[5] : null;
-    const clientMessageId = normalizedSql.includes("client_message_id")
-      ? params.at(-1)
-      : null;
+    const columnList = normalizedSql.match(
+      /INSERT INTO messages \((.*?)\)/,
+    )?.[1];
+    const insertedValues = Object.fromEntries(
+      columnList.split(", ").map((column, index) => [column, params[index]]),
+    );
+    const {
+      sender_id: senderId,
+      receiver_id: receiverId,
+      message,
+      message_type: messageType,
+      media_url: mediaUrl,
+    } = insertedValues;
+    const reelId = insertedValues.reel_id ?? null;
+    const clientMessageId = insertedValues.client_message_id ?? null;
     if (
       clientMessageId &&
       storedMessages.some(
@@ -445,7 +560,11 @@ async function fakeQuery(sql, params = []) {
       message,
       message_type: messageType,
       media_url: mediaUrl,
-      reel_id: reelMessagesEnabled ? reelId ?? null : null,
+      post_id: insertedValues.post_id ?? null,
+      post_image_url: insertedValues.post_image_url ?? null,
+      post_caption: insertedValues.post_caption ?? null,
+      post_owner_username: insertedValues.post_owner_username ?? null,
+      reel_id: reelMessagesEnabled ? (reelId ?? null) : null,
       client_message_id: clientMessageId,
       is_read: 0,
       created_at: new Date(`2026-10-12T00:00:0${nextMessageId}Z`),
@@ -471,6 +590,10 @@ async function fakeQuery(sql, params = []) {
               message: message.message,
               messageType: message.message_type,
               mediaUrl: message.media_url,
+              postId: message.post_id,
+              postImageUrl: message.post_image_url,
+              postCaption: message.post_caption,
+              postOwnerUsername: message.post_owner_username,
               reelId: message.reel_id,
               reelVideoUrl: message.reel_id
                 ? `https://cdn.example/reels/${message.reel_id}.mp4`
@@ -490,33 +613,48 @@ async function fakeQuery(sql, params = []) {
 
   if (
     normalizedSql.startsWith("SELECT m.id, m.sender_id AS senderId") &&
-    normalizedSql.includes("WHERE (m.sender_id = ? AND m.receiver_id = ?")
+    normalizedSql.includes("WHERE ((m.sender_id = ? AND m.receiver_id = ?")
   ) {
     const [userId, otherUserId] = params;
-    const rows = storedMessages
+    let rows = storedMessages
       .filter(
         (message) =>
-          (message.sender_id === userId && message.receiver_id === otherUserId) ||
+          (message.sender_id === userId &&
+            message.receiver_id === otherUserId) ||
           (message.sender_id === otherUserId && message.receiver_id === userId),
       )
-      .sort((left, right) => left.created_at - right.created_at || left.id - right.id)
-      .map((message) => ({
-        id: message.id,
-        senderId: message.sender_id,
-        receiverId: message.receiver_id,
-        message: message.message,
-        messageType: message.message_type,
-        mediaUrl: message.media_url,
-        reelId: message.reel_id,
-        reelVideoUrl: message.reel_id
-          ? `https://cdn.example/reels/${message.reel_id}.mp4`
-          : null,
-        reelCaption: message.reel_id ? `Reel ${message.reel_id}` : null,
-        reelOwnerId: message.reel_id ? 11 : null,
-        reelOwnerUsername: message.reel_id ? "reel-owner" : null,
-        isRead: message.is_read,
-        createdAt: message.created_at,
-      }));
+      .sort((left, right) =>
+        normalizedSql.includes("ORDER BY m.id DESC")
+          ? right.id - left.id
+          : left.created_at - right.created_at || left.id - right.id,
+      );
+    if (normalizedSql.includes("AND m.id < ?")) {
+      rows = rows.filter((message) => message.id < Number(params[4]));
+    }
+    if (normalizedSql.includes("LIMIT ?")) {
+      rows = rows.slice(0, Number(params.at(-1)));
+    }
+    rows = rows.map((message) => ({
+      id: message.id,
+      senderId: message.sender_id,
+      receiverId: message.receiver_id,
+      message: message.message,
+      messageType: message.message_type,
+      mediaUrl: message.media_url,
+      postId: message.post_id,
+      postImageUrl: message.post_image_url,
+      postCaption: message.post_caption,
+      postOwnerUsername: message.post_owner_username,
+      reelId: message.reel_id,
+      reelVideoUrl: message.reel_id
+        ? `https://cdn.example/reels/${message.reel_id}.mp4`
+        : null,
+      reelCaption: message.reel_id ? `Reel ${message.reel_id}` : null,
+      reelOwnerId: message.reel_id ? 11 : null,
+      reelOwnerUsername: message.reel_id ? "reel-owner" : null,
+      isRead: message.is_read,
+      createdAt: message.created_at,
+    }));
     return [rows, []];
   }
 
@@ -525,7 +663,8 @@ async function fakeQuery(sql, params = []) {
     const userId = Number(params[0]);
     const latestByParticipant = new Map();
     for (const message of storedMessages) {
-      if (message.sender_id !== userId && message.receiver_id !== userId) continue;
+      if (message.sender_id !== userId && message.receiver_id !== userId)
+        continue;
       const conversationUserId =
         message.sender_id === userId ? message.receiver_id : message.sender_id;
       const previous = latestByParticipant.get(conversationUserId);
@@ -534,20 +673,22 @@ async function fakeQuery(sql, params = []) {
       }
     }
     return [
-      [...latestByParticipant.entries()].map(([conversationUserId, message]) => ({
-        id: message.id,
-        senderId: message.sender_id,
-        receiverId: message.receiver_id,
-        message: message.message,
-        messageType: message.message_type,
-        mediaUrl: message.media_url,
-        isRead: message.is_read,
-        createdAt: message.created_at,
-        conversationUserId,
-        username: `user-${conversationUserId}`,
-        name: `User ${conversationUserId}`,
-        profileImage: "",
-      })),
+      [...latestByParticipant.entries()].map(
+        ([conversationUserId, message]) => ({
+          id: message.id,
+          senderId: message.sender_id,
+          receiverId: message.receiver_id,
+          message: message.message,
+          messageType: message.message_type,
+          mediaUrl: message.media_url,
+          isRead: message.is_read,
+          createdAt: message.created_at,
+          conversationUserId,
+          username: `user-${conversationUserId}`,
+          name: `User ${conversationUserId}`,
+          profileImage: "",
+        }),
+      ),
       [],
     ];
   }
@@ -591,7 +732,8 @@ async function request(path, options = {}) {
         : { "Content-Type": "application/json" }),
       ...(requestOptions.headers || {}),
       Authorization:
-        authToken || `Bearer ${jwt.sign({ id: authUserId }, process.env.JWT_SECRET)}`,
+        authToken ||
+        `Bearer ${jwt.sign({ id: authUserId }, process.env.JWT_SECRET)}`,
     },
   });
 }
@@ -614,6 +756,7 @@ beforeEach(() => {
   storedMessages = [];
   storedLikes = [];
   storedStories = [];
+  storedReposts = [];
   savedMessages = [];
   savedReels = [];
   savedPosts = [];
@@ -621,6 +764,7 @@ beforeEach(() => {
   nextMessageId = 1;
   lastConversationQuery = "";
   nextStoryId = 1;
+  nextRepostId = 1;
   nextQueryError = null;
 });
 
@@ -633,6 +777,7 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
   const originalCreateMessage = postModel.createMessage;
   const originalMarkMessagesRead = postModel.markMessagesRead;
   const socketMessages = [];
+  const createMessageCalls = [];
   let readReceipt;
   t.after(() => {
     postModel.createMessage = originalCreateMessage;
@@ -647,11 +792,21 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
     mediaUrl,
     reelId,
     clientMessageId,
+    ...remainingArgs
   ) => {
+    createMessageCalls.push([
+      senderId,
+      receiverId,
+      message,
+      messageType,
+      mediaUrl,
+      reelId,
+      clientMessageId,
+      ...remainingArgs,
+    ]);
     const existing = socketMessages.find(
       (item) =>
-        item.senderId === senderId &&
-        item.clientMessageId === clientMessageId,
+        item.senderId === senderId && item.clientMessageId === clientMessageId,
     );
     if (existing) return existing;
     const created = {
@@ -688,7 +843,9 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
     receiver.disconnect();
   });
 
-  const typing = new Promise((resolve) => receiver.once("chat:typing", resolve));
+  const typing = new Promise((resolve) =>
+    receiver.once("chat:typing", resolve),
+  );
   sender.emit("chat:typing", { receiverId: 8, isTyping: true });
   assert.deepEqual(await typing, { userId: 7, isTyping: true });
 
@@ -726,6 +883,22 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
   assert.equal(duplicateAck.data.id, "1");
   assert.equal(socketMessages.length, 1);
 
+  const restDelivered = new Promise((resolve) =>
+    receiver.once("chat:message", resolve),
+  );
+  const restSent = await request("/api/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      receiverId: 8,
+      message: "sent over REST",
+      messageType: "text",
+    }),
+  });
+  assert.equal(restSent.status, 201);
+  assert.equal((await restDelivered).message, "sent over REST");
+  assert.equal(createMessageCalls[0].length, 11);
+  assert.equal(createMessageCalls[2].length, 11);
+
   const imageDelivered = new Promise((resolve) =>
     receiver.once("chat:message", resolve),
   );
@@ -743,7 +916,10 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
     );
   });
   assert.equal(imageAck.success, true);
-  assert.equal((await imageDelivered).mediaUrl, "https://cdn.example/chat/photo.jpg");
+  assert.equal(
+    (await imageDelivered).mediaUrl,
+    "https://cdn.example/chat/photo.jpg",
+  );
 
   const invalidImageAck = await new Promise((resolve) => {
     sender.emit(
@@ -841,6 +1017,15 @@ test("messages use the authenticated sender and return chronological and empty c
     ["hello", "follow-up"],
   );
 
+  const newestPage = await request("/api/messages/8?limit=1");
+  const newestPageJson = await newestPage.json();
+  assert.equal(newestPageJson.data[0].message, "follow-up");
+  assert.equal(newestPageJson.hasMore, true);
+  const olderPage = await request("/api/messages/8?beforeId=2&limit=1");
+  const olderPageJson = await olderPage.json();
+  assert.equal(olderPageJson.data[0].message, "hello");
+  assert.equal(olderPageJson.hasMore, false);
+
   const conversations = await request("/api/messages/conversations");
   assert.equal(conversations.status, 200);
   const conversationData = (await conversations.json()).data;
@@ -851,6 +1036,28 @@ test("messages use the authenticated sender and return chronological and empty c
   assert.equal((await request("/api/messages/9")).status, 200);
   const empty = await request("/api/messages/9");
   assert.deepEqual((await empty.json()).data, []);
+});
+
+test("REST supports shared post messages and persists the post preview fields", async () => {
+  const response = await request("/api/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      receiverId: 8,
+      messageType: "post",
+      postId: 12,
+      postImageUrl: "https://cdn.example/posts/12.jpg",
+      postCaption: "A caption",
+      postOwnerUsername: "post-owner",
+    }),
+  });
+
+  assert.equal(response.status, 201);
+  const sent = await response.json();
+  assert.equal(sent.data.messageType, "post");
+  assert.equal(sent.data.postId, 12);
+  assert.equal(sent.data.postImageUrl, "https://cdn.example/posts/12.jpg");
+  assert.equal(sent.data.postCaption, "A caption");
+  assert.equal(sent.data.postOwnerUsername, "post-owner");
 });
 
 test("messages reject invalid receivers, unsupported types, and unauthenticated requests", async () => {
@@ -957,7 +1164,10 @@ test("saved posts, messages, and reels persist per user without mutating content
     { method: "DELETE", authUserId: 8 },
   );
   assert.equal(unauthorizedUnsave.status, 200);
-  assert.equal(savedMessages.some((bookmark) => bookmark.user_id === 7), true);
+  assert.equal(
+    savedMessages.some((bookmark) => bookmark.user_id === 7),
+    true,
+  );
 
   const saveReel = await request("/api/saved-items/reels/9", {
     method: "POST",
@@ -1000,22 +1210,31 @@ test("saved posts, messages, and reels persist per user without mutating content
   const savedItemsResponse = await request("/api/saved-items");
   assert.equal(savedItemsResponse.status, 200);
   const items = (await savedItemsResponse.json()).data;
-  assert.deepEqual(
-    items.map((item) => item.itemType).sort(),
-    ["message", "post", "reel"],
-  );
+  assert.deepEqual(items.map((item) => item.itemType).sort(), [
+    "message",
+    "post",
+    "reel",
+  ]);
   assert.equal(
     items.find((item) => item.itemType === "post").mediaUrl,
     "https://cdn.example/posts/12.jpg",
   );
-  assert.equal(items.find((item) => item.itemType === "reel").videoUrl,
-    "https://cdn.example/reels/9.mp4");
-  assert.equal(items.find((item) => item.itemType === "message").message,
-    "bookmark me");
+  assert.equal(
+    items.find((item) => item.itemType === "reel").videoUrl,
+    "https://cdn.example/reels/9.mp4",
+  );
+  assert.equal(
+    items.find((item) => item.itemType === "message").message,
+    "bookmark me",
+  );
   assert.deepEqual(storedMessages[0], originalMessage);
 
   assert.equal(
-    (await request(`/api/saved-items/messages/${message.id}`, { method: "DELETE" })).status,
+    (
+      await request(`/api/saved-items/messages/${message.id}`, {
+        method: "DELETE",
+      })
+    ).status,
     200,
   );
   assert.equal(
@@ -1026,7 +1245,10 @@ test("saved posts, messages, and reels persist per user without mutating content
     (await request("/api/saved-items/posts/12", { method: "DELETE" })).status,
     200,
   );
-  assert.equal(savedPosts.some((bookmark) => bookmark.user_id === 7), false);
+  assert.equal(
+    savedPosts.some((bookmark) => bookmark.user_id === 7),
+    false,
+  );
   assert.deepEqual((await (await request("/api/saved-items")).json()).data, []);
   assert.equal(savedMessages.length, 0);
   assert.equal(savedReels.length, 0);
@@ -1038,11 +1260,9 @@ test("saved items report unavailable migration and enforce authentication", asyn
   assert.equal(missingMigration.status, 503);
   assert.equal((await missingMigration.json()).success, false);
 
-  const expiredToken = jwt.sign(
-    { id: 7 },
-    process.env.JWT_SECRET,
-    { expiresIn: -1 },
-  );
+  const expiredToken = jwt.sign({ id: 7 }, process.env.JWT_SECRET, {
+    expiresIn: -1,
+  });
   const expiredAuth = await request("/api/saved-items", {
     authToken: `Bearer ${expiredToken}`,
   });
@@ -1113,6 +1333,68 @@ test("reel-like aliases use reel_id, toggle state, and never create post likes",
   assert.equal(postLike.status, 201);
   assert.equal(storedLikes.at(-1).post_id, 25);
   assert.equal(storedLikes.at(-1).reel_id, null);
+});
+
+test("reposts support posts and reels, are idempotent, and can only be removed by their owner", async () => {
+  const invalidTarget = await request("/api/reposts", {
+    method: "POST",
+    body: JSON.stringify({ postId: 12, reelId: 9 }),
+  });
+  assert.equal(invalidTarget.status, 400);
+
+  const createdPost = await request("/api/reposts", {
+    method: "POST",
+    body: JSON.stringify({ postId: 12, note: "Worth a look" }),
+  });
+  assert.equal(createdPost.status, 201);
+  const postRepost = (await createdPost.json()).data;
+  assert.equal(postRepost.postId, 12);
+  assert.equal(postRepost.reelId, null);
+  assert.equal(postRepost.note, "Worth a look");
+
+  const duplicatePost = await request("/api/reposts", {
+    method: "POST",
+    body: JSON.stringify({ postId: 12, note: "Another note" }),
+  });
+  assert.equal(duplicatePost.status, 200);
+  assert.equal((await duplicatePost.json()).data.id, postRepost.id);
+  assert.equal(storedReposts.length, 1);
+
+  const createdReel = await request("/api/reposts", {
+    method: "POST",
+    body: JSON.stringify({ reel_id: 9 }),
+  });
+  assert.equal(createdReel.status, 201);
+  assert.equal((await createdReel.json()).data.reelId, 9);
+
+  const missingReel = await request("/api/reposts", {
+    method: "POST",
+    body: JSON.stringify({ reelId: 404 }),
+  });
+  assert.equal(missingReel.status, 404);
+
+  const ownReposts = await request("/api/reposts");
+  assert.equal((await ownReposts.json()).data.length, 2);
+  const profileReposts = await request("/api/reposts/user/7", {
+    authUserId: 8,
+  });
+  assert.equal((await profileReposts.json()).data.length, 2);
+
+  const forbiddenDelete = await request(`/api/reposts/${postRepost.id}`, {
+    method: "DELETE",
+    authUserId: 8,
+  });
+  assert.equal(forbiddenDelete.status, 404);
+
+  const deletedPost = await request(`/api/reposts/${postRepost.id}`, {
+    method: "DELETE",
+  });
+  assert.equal(deletedPost.status, 200);
+  assert.equal(
+    (await request("/api/reposts").then((response) => response.json())).data
+      .length,
+    1,
+  );
 });
 
 test("profile update accepts the current-user route and Flutter field names", async (t) => {
@@ -1245,7 +1527,10 @@ test("post captions and deletion are available only through the authenticated en
   });
 
   postModel.deletePost = async () => false;
-  assert.equal((await request("/api/posts/12", { method: "DELETE" })).status, 404);
+  assert.equal(
+    (await request("/api/posts/12", { method: "DELETE" })).status,
+    404,
+  );
 });
 
 test("post deletion removes dependent social rows in one transaction", async (t) => {
@@ -1298,13 +1583,17 @@ test("reel details can be loaded by canonical ID for saved-item navigation", asy
 });
 
 test("reel likes report the missing migration and database failures without false success", async () => {
-  const migrationRequired = await request("/api/likes/reel/40", { method: "POST" });
+  const migrationRequired = await request("/api/likes/reel/40", {
+    method: "POST",
+  });
   assert.equal(migrationRequired.status, 503);
   assert.equal((await migrationRequired.json()).isLiked, false);
   assert.equal(storedLikes.length, 0);
 
   reelLikesEnabled = true;
-  const invalidId = await request("/api/reels/like/not-an-id", { method: "POST" });
+  const invalidId = await request("/api/reels/like/not-an-id", {
+    method: "POST",
+  });
   assert.equal(invalidId.status, 400);
 
   nextQueryError = Object.assign(new Error("database unavailable"), {
@@ -1496,15 +1785,35 @@ test("local health endpoint responds successfully", async () => {
 
 test("new post, comment, story, notification, and auth routes validate IDs and required tokens", async () => {
   assert.equal((await request("/api/posts/not-an-id")).status, 400);
-  assert.equal((await request("/api/comments/not-an-id/like", { method: "POST" })).status, 400);
-  assert.equal((await request("/api/comments/not-an-id", {
-    method: "PUT",
-    body: JSON.stringify({ comment: "Updated text" }),
-  })).status, 400);
-  assert.equal((await request("/api/stories/not-an-id/view", { method: "PUT" })).status, 400);
-  assert.equal((await request("/api/notifications/not-an-id/read", { method: "PUT" })).status, 400);
-  assert.equal((await request("/api/auth/refresh", {
-    method: "POST",
-    body: JSON.stringify({}),
-  })).status, 400);
+  assert.equal(
+    (await request("/api/comments/not-an-id/like", { method: "POST" })).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/api/comments/not-an-id", {
+        method: "PUT",
+        body: JSON.stringify({ comment: "Updated text" }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await request("/api/stories/not-an-id/view", { method: "PUT" })).status,
+    400,
+  );
+  assert.equal(
+    (await request("/api/notifications/not-an-id/read", { method: "PUT" }))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/api/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    ).status,
+    400,
+  );
 });

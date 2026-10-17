@@ -2,6 +2,7 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const postModel = require("../models/postModel");
 const userModel = require("../models/userModel");
+const { isValidMessageType } = require("../utils/messageTypes");
 
 const USER_ROOM_PREFIX = "user:";
 const onlineUsers = new Map();
@@ -25,6 +26,8 @@ function isValidMediaUrl(value) {
 function attachChatSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: { origin: true, methods: ["GET", "POST"] },
+    pingInterval: 10000,
+    pingTimeout: 8000,
   });
   attachChatSocket.io = io;
 
@@ -44,7 +47,10 @@ function attachChatSocket(httpServer) {
         return next(new Error("ACCOUNT_NOT_FOUND"));
       }
       socket.data.userId = userId;
-      socket.data.activityVisible = user.showActivityStatus !== false;
+      socket.data.activityVisible =
+        user.showActivityStatus === undefined
+          ? true
+          : Boolean(user.showActivityStatus);
       return next();
     } catch (error) {
       return next(
@@ -58,6 +64,7 @@ function attachChatSocket(httpServer) {
   io.on("connection", (socket) => {
     const userId = socket.data.userId;
     const userRoom = `${USER_ROOM_PREFIX}${userId}`;
+    console.log(`Socket connected userId=${userId} socket.id=${socket.id}`);
     const userSockets = onlineUsers.get(userId) || new Set();
     const becameOnline = userSockets.size === 0;
     userSockets.add(socket.id);
@@ -66,7 +73,9 @@ function attachChatSocket(httpServer) {
 
     socket.emit(
       "presence:snapshot",
-      [...onlineUsers.keys()].filter((id) => id === userId || onlineVisibility.get(id) !== false),
+      [...onlineUsers.keys()].filter(
+        (id) => id === userId || onlineVisibility.get(id) !== false,
+      ),
     );
     if (becameOnline && socket.data.activityVisible) {
       onlineVisibility.set(userId, true);
@@ -91,9 +100,15 @@ function attachChatSocket(httpServer) {
           });
         }
         socket.join(`chat:${[userId, peerId].sort((a, b) => a - b).join(":")}`);
+        console.log(
+          `Socket joined chat userId=${userId} socket.id=${socket.id} peerId=${peerId}`,
+        );
         return acknowledge({ success: true });
       } catch (error) {
-        console.error("Socket chat join error:", error);
+        console.error(
+          `Socket chat join error userId=${userId} socket.id=${socket.id}:`,
+          error,
+        );
         return acknowledge({
           success: false,
           message: "Could not open this conversation",
@@ -102,19 +117,26 @@ function attachChatSocket(httpServer) {
     });
 
     socket.on("presence:ping", (acknowledge = () => {}) => {
-      if (typeof acknowledge === "function") acknowledge({ success: true, timestamp: Date.now() });
+      if (typeof acknowledge === "function")
+        acknowledge({ success: true, timestamp: Date.now() });
     });
 
     socket.on("chat:send", async (payload, acknowledge = () => {}) => {
       const receiverId = parseUserId(payload?.receiverId);
-      const message = typeof payload?.message === "string"
-        ? payload.message.trim()
-        : "";
+      const message =
+        typeof payload?.message === "string" ? payload.message.trim() : "";
       const messageType = payload?.messageType || "text";
       const mediaUrl = payload?.mediaUrl ?? null;
-      const reelId = payload?.reelId == null
-        ? null
-        : parseUserId(payload.reelId);
+      const rawReelId = payload?.reelId ?? payload?.reel_id;
+      const rawPostId = payload?.postId ?? payload?.post_id;
+      const reelId = rawReelId == null ? null : parseUserId(rawReelId);
+      const postId = rawPostId == null ? null : parseUserId(rawPostId);
+      const postImageUrl =
+        payload?.postImageUrl ?? payload?.post_image_url ?? null;
+      const postCaption = payload?.postCaption ?? payload?.post_caption ?? null;
+      const postOwnerUsername =
+        payload?.postOwnerUsername ?? payload?.post_owner_username ?? null;
+
       const clientMessageId =
         typeof payload?.clientMessageId === "string" &&
         payload.clientMessageId.length <= 64
@@ -124,20 +146,27 @@ function attachChatSocket(httpServer) {
       if (
         !receiverId ||
         receiverId === userId ||
-        (!message && !mediaUrl) ||
+        (!message && !mediaUrl && messageType !== "post") ||
         message.length > 5000 ||
         !clientMessageId ||
-        !["text", "image", "video", "reel"].includes(messageType) ||
-        (["image", "video"].includes(messageType) &&
+        !isValidMessageType(messageType) ||
+        (["image", "video", "audio", "file"].includes(messageType) &&
           !isValidMediaUrl(mediaUrl)) ||
-        (!["image", "video"].includes(messageType) && mediaUrl != null) ||
+        (!["image", "video", "audio", "file"].includes(messageType) &&
+          mediaUrl != null) ||
         (messageType === "reel" && !reelId) ||
-        (messageType !== "reel" && payload?.reelId != null)
+        (messageType !== "reel" && rawReelId != null) ||
+        (messageType === "post" && !postId) ||
+        (messageType !== "post" && rawPostId != null)
       ) {
+        console.error(
+          `Socket send rejected userId=${userId} socket.id=${socket.id} receiverId=${receiverId || "invalid"}`,
+        );
         return acknowledge({
           success: false,
           code: "INVALID_MESSAGE",
-          message: "A valid receiver, message, and clientMessageId are required",
+          message:
+            "A valid receiver, message, and clientMessageId are required",
         });
       }
 
@@ -159,14 +188,19 @@ function attachChatSocket(httpServer) {
           mediaUrl,
           reelId,
           clientMessageId,
+          postId,
+          postImageUrl,
+          postCaption,
+          postOwnerUsername,
         );
         const event = { ...createdMessage, clientMessageId };
-        io.to(`${USER_ROOM_PREFIX}${receiverId}`)
-          .to(userRoom)
-          .emit("chat:message", event);
+        attachChatSocket.emitMessage(userId, receiverId, event);
         return acknowledge({ success: true, data: event });
       } catch (error) {
-        console.error("Socket send message error:", error);
+        console.error(
+          `Socket send message error userId=${userId} socket.id=${socket.id}:`,
+          error,
+        );
         const migrationRequired =
           error.code === "CHAT_IDEMPOTENCY_MIGRATION_REQUIRED";
         const reelMigrationRequired =
@@ -216,6 +250,9 @@ function attachChatSocket(httpServer) {
     });
 
     socket.on("disconnect", () => {
+      console.log(
+        `Socket disconnected userId=${userId} socket.id=${socket.id}`,
+      );
       if (socket.data.typingTo) {
         io.to(`${USER_ROOM_PREFIX}${socket.data.typingTo}`).emit(
           "chat:typing",
@@ -255,6 +292,13 @@ attachChatSocket.setActivityVisibility = (userId, isVisible) => {
     io.emit("presence:offline", { userId });
     io.emit("presence:update", { userId, isOnline: false });
   }
+};
+attachChatSocket.emitMessage = (senderId, receiverId, message) => {
+  const io = attachChatSocket.io;
+  if (!io) return;
+  io.to(`${USER_ROOM_PREFIX}${receiverId}`)
+    .to(`${USER_ROOM_PREFIX}${senderId}`)
+    .emit("chat:message", message);
 };
 
 module.exports = attachChatSocket;

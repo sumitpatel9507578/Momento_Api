@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const notificationModel = require("./notificationModel");
+const { MESSAGE_TYPES } = require("../utils/messageTypes");
 
 // Read table metadata so SQL only uses columns that the database actually has.
 async function getTableCols(tableName) {
@@ -36,7 +37,12 @@ async function getPostById(postId, viewerId = null) {
   return _mapPost(rows[0]);
 }
 
-async function getFeed(limit = 20, offset = 0, viewerId = null, followingOnly = false) {
+async function getFeed(
+  limit = 20,
+  offset = 0,
+  viewerId = null,
+  followingOnly = false,
+) {
   const followFilter = followingOnly
     ? "AND (p.user_id = ? OR EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = p.user_id))"
     : "";
@@ -122,10 +128,9 @@ function getLikeTarget(postId, reelId = null) {
 }
 
 async function ensureLikeTargetExists(target) {
-  const [rows] = await db.query(
-    `SELECT id FROM ${target.table} WHERE id = ?`,
-    [target.id],
-  );
+  const [rows] = await db.query(`SELECT id FROM ${target.table} WHERE id = ?`, [
+    target.id,
+  ]);
   if (rows.length === 0) {
     const error = new Error(
       `${target.table === "posts" ? "Post" : "Reel"} not found`,
@@ -242,7 +247,13 @@ async function deletePost(postId, userId) {
   }
 }
 
-async function createComment(userId, postId, comment, reelId = null, parentCommentId = null) {
+async function createComment(
+  userId,
+  postId,
+  comment,
+  reelId = null,
+  parentCommentId = null,
+) {
   const cols = await getTableCols("comments");
   const valueColumns = [
     cols.includes("userId") ? "userId" : "user_id",
@@ -261,7 +272,9 @@ async function createComment(userId, postId, comment, reelId = null, parentComme
   }
   if (parentCommentId !== null) {
     if (!cols.includes("parent_comment_id")) {
-      const error = new Error("Nested comments require the comments parent_comment_id migration");
+      const error = new Error(
+        "Nested comments require the comments parent_comment_id migration",
+      );
       error.code = "NESTED_COMMENTS_MIGRATION_REQUIRED";
       throw error;
     }
@@ -375,7 +388,14 @@ async function deleteReel(reelId, userId) {
 }
 
 // --- Stories ---
-async function createStory(userId, mediaUrl, mediaType, caption, expiresAt, options = {}) {
+async function createStory(
+  userId,
+  mediaUrl,
+  mediaType,
+  caption,
+  expiresAt,
+  options = {},
+) {
   const cols = await getTableCols("stories");
   const requiredColumns = [
     "user_id",
@@ -394,15 +414,31 @@ async function createStory(userId, mediaUrl, mediaType, caption, expiresAt, opti
   }
 
   const storyColumns = [
-    "user_id", "media_url", "media_type", "caption", "expires_at",
-    "layers", "selected_music", "is_ai_generated", "audience",
-    "allow_replies", "allow_sharing", "alt_text",
+    "user_id",
+    "media_url",
+    "media_type",
+    "caption",
+    "expires_at",
+    "layers",
+    "selected_music",
+    "is_ai_generated",
+    "audience",
+    "allow_replies",
+    "allow_sharing",
+    "alt_text",
   ];
   const storyValues = [
-    userId, mediaUrl, mediaType, caption, expiresAt,
-    JSON.stringify(options.layers || []), options.selectedMusic || null,
-    Boolean(options.isAiGenerated), options.audience || "followers",
-    options.allowReplies !== false, options.allowSharing !== false,
+    userId,
+    mediaUrl,
+    mediaType,
+    caption,
+    expiresAt,
+    JSON.stringify(options.layers || []),
+    options.selectedMusic || null,
+    Boolean(options.isAiGenerated),
+    options.audience || "followers",
+    options.allowReplies !== false,
+    options.allowSharing !== false,
     options.altText || null,
   ];
   const [result] = await db.query(
@@ -519,8 +555,6 @@ async function deleteStory(storyId, userId) {
   return result.affectedRows > 0;
 }
 
-const MESSAGE_TYPES = ["text", "image", "video", "audio", "file", "reel"];
-
 async function requireMessageColumns() {
   const columns = await getTableCols("messages");
   const requiredColumns = [
@@ -556,10 +590,14 @@ function mapMessage(row) {
     reelVideoUrl: row.reelVideoUrl ?? row.reel_video_url ?? null,
     reelCaption: row.reelCaption ?? row.reel_caption ?? null,
     reelOwnerId: row.reelOwnerId ?? row.reel_owner_id ?? null,
-    reelOwnerUsername:
-      row.reelOwnerUsername ?? row.reel_owner_username ?? null,
+    reelOwnerUsername: row.reelOwnerUsername ?? row.reel_owner_username ?? null,
+    postId: row.postId ?? row.post_id ?? null,
+    postImageUrl: row.postImageUrl ?? row.post_image_url ?? null,
+    postCaption: row.postCaption ?? row.post_caption ?? null,
+    postOwnerUsername: row.postOwnerUsername ?? row.post_owner_username ?? null,
     clientMessageId: row.clientMessageId ?? row.client_message_id ?? null,
     isRead: row.isRead ?? row.is_read,
+    readAt: row.readAt ?? row.read_at ?? null,
     createdAt: row.createdAt ?? row.created_at,
   };
 }
@@ -572,6 +610,10 @@ async function getMessageById(messageId, columns) {
     : `NULL AS reelId, NULL AS reelVideoUrl,
        NULL AS reelCaption, NULL AS reelOwnerId,
        NULL AS reelOwnerUsername`;
+  const postFields = columns.includes("post_id")
+    ? `m.post_id AS postId, m.post_image_url AS postImageUrl,
+       m.post_caption AS postCaption, m.post_owner_username AS postOwnerUsername`
+    : `NULL AS postId, NULL AS postImageUrl, NULL AS postCaption, NULL AS postOwnerUsername`;
   const reelJoins = columns.includes("reel_id")
     ? `LEFT JOIN reels r ON r.id = m.reel_id
        LEFT JOIN users owner ON owner.id = r.user_id`
@@ -579,11 +621,14 @@ async function getMessageById(messageId, columns) {
   const clientIdField = columns.includes("client_message_id")
     ? "m.client_message_id AS clientMessageId"
     : "NULL AS clientMessageId";
+  const readAtField = columns.includes("read_at")
+    ? "m.read_at AS readAt"
+    : "NULL AS readAt";
   const [rows] = await db.query(
     `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
             m.message, m.message_type AS messageType,
-            m.media_url AS mediaUrl, ${reelFields}, ${clientIdField},
-            m.is_read AS isRead, m.created_at AS createdAt
+            m.media_url AS mediaUrl, ${reelFields}, ${postFields}, ${clientIdField},
+            m.is_read AS isRead, ${readAtField}, m.created_at AS createdAt
      FROM messages m
      ${reelJoins}
      WHERE m.id = ?`,
@@ -601,8 +646,12 @@ async function createMessage(
   mediaUrl,
   reelId = null,
   clientMessageId = null,
+  postId = null,
+  postImageUrl = null,
+  postCaption = null,
+  postOwnerUsername = null,
 ) {
-  if (!MESSAGE_TYPES.includes(messageType)) {
+  if (!MESSAGE_TYPES.has(messageType)) {
     const error = new Error("Unsupported message type");
     error.code = "INVALID_MESSAGE_TYPE";
     throw error;
@@ -638,6 +687,38 @@ async function createMessage(
     error.code = "INVALID_REEL_MESSAGE";
     throw error;
   }
+  if (messageType === "post") {
+    const postColumns = [
+      "post_id",
+      "post_image_url",
+      "post_caption",
+      "post_owner_username",
+    ];
+    if (postColumns.some((column) => !columns.includes(column))) {
+      const error = new Error(
+        "Shared post messages require the chat messages migration",
+      );
+      error.code = "POST_MESSAGE_MIGRATION_REQUIRED";
+      throw error;
+    }
+    if (!Number.isSafeInteger(Number(postId)) || Number(postId) <= 0) {
+      const error = new Error("A postId is required for post messages");
+      error.code = "INVALID_POST_MESSAGE";
+      throw error;
+    }
+    const [posts] = await db.query("SELECT id FROM posts WHERE id = ?", [
+      postId,
+    ]);
+    if (!posts[0]) {
+      const error = new Error("Post not found");
+      error.code = "SHARED_POST_NOT_FOUND";
+      throw error;
+    }
+  } else if (postId !== null && postId !== undefined) {
+    const error = new Error("A postId is allowed only for post messages");
+    error.code = "INVALID_POST_MESSAGE";
+    throw error;
+  }
   if (messageType === "reel") {
     const [reels] = await db.query(`SELECT id FROM reels WHERE id = ?`, [
       reelId,
@@ -656,10 +737,32 @@ async function createMessage(
     "message_type",
     "media_url",
   ];
-  const insertValues = [senderId, receiverId, message, messageType, mediaUrl || null];
+  const insertValues = [
+    senderId,
+    receiverId,
+    message,
+    messageType,
+    mediaUrl || null,
+  ];
   if (columns.includes("reel_id")) {
     insertColumns.push("reel_id");
     insertValues.push(reelId || null);
+  }
+  if (columns.includes("post_id") && postId != null) {
+    insertColumns.push("post_id");
+    insertValues.push(postId);
+  }
+  if (columns.includes("post_image_url")) {
+    insertColumns.push("post_image_url");
+    insertValues.push(postImageUrl);
+  }
+  if (columns.includes("post_caption")) {
+    insertColumns.push("post_caption");
+    insertValues.push(postCaption);
+  }
+  if (columns.includes("post_owner_username")) {
+    insertColumns.push("post_owner_username");
+    insertValues.push(postOwnerUsername);
   }
   if (clientMessageId) {
     insertColumns.push("client_message_id");
@@ -687,13 +790,15 @@ async function createMessage(
 
   const createdMessage = await getMessageById(result.insertId, columns);
   if (!createdMessage) {
-    throw new Error("The saved message could not be read back from the database");
+    throw new Error(
+      "The saved message could not be read back from the database",
+    );
   }
   return createdMessage;
 }
 
-// Fetch both directions of a conversation from oldest to newest.
-async function getMessages(userId, otherUserId) {
+// Omitted pagination options retain the original full chronological response.
+async function getMessages(userId, otherUserId, pagination = null) {
   const columns = await requireMessageColumns();
   const reelFields = columns.includes("reel_id")
     ? `m.reel_id AS reelId, r.video_url AS reelVideoUrl,
@@ -702,6 +807,10 @@ async function getMessages(userId, otherUserId) {
     : `NULL AS reelId, NULL AS reelVideoUrl,
        NULL AS reelCaption, NULL AS reelOwnerId,
        NULL AS reelOwnerUsername`;
+  const postFields = columns.includes("post_id")
+    ? `m.post_id AS postId, m.post_image_url AS postImageUrl,
+       m.post_caption AS postCaption, m.post_owner_username AS postOwnerUsername`
+    : `NULL AS postId, NULL AS postImageUrl, NULL AS postCaption, NULL AS postOwnerUsername`;
   const reelJoins = columns.includes("reel_id")
     ? `LEFT JOIN reels r ON r.id = m.reel_id
        LEFT JOIN users owner ON owner.id = r.user_id`
@@ -709,24 +818,46 @@ async function getMessages(userId, otherUserId) {
   const clientIdField = columns.includes("client_message_id")
     ? "m.client_message_id AS clientMessageId"
     : "NULL AS clientMessageId";
+  const readAtField = columns.includes("read_at")
+    ? "m.read_at AS readAt"
+    : "NULL AS readAt";
+  const paginated = pagination !== null;
+  const beforeFilter = paginated && pagination.beforeId ? "AND m.id < ?" : "";
+  const order = paginated
+    ? "ORDER BY m.id DESC"
+    : "ORDER BY m.created_at ASC, m.id ASC";
+  const queryParams = [userId, otherUserId, otherUserId, userId];
+  if (beforeFilter) queryParams.push(pagination.beforeId);
+  if (paginated) queryParams.push(pagination.limit + 1);
   const [rows] = await db.query(
     `SELECT m.id, m.sender_id AS senderId, m.receiver_id AS receiverId,
             m.message, m.message_type AS messageType,
-            m.media_url AS mediaUrl, ${reelFields}, ${clientIdField},
-            m.is_read AS isRead, m.created_at AS createdAt
+            m.media_url AS mediaUrl, ${reelFields}, ${postFields}, ${clientIdField},
+            m.is_read AS isRead, ${readAtField}, m.created_at AS createdAt
      FROM messages m
      ${reelJoins}
-     WHERE (m.sender_id = ? AND m.receiver_id = ?)
-        OR (m.sender_id = ? AND m.receiver_id = ?)
-     ORDER BY m.created_at ASC, m.id ASC`,
-    [userId, otherUserId, otherUserId, userId],
+        WHERE ((m.sender_id = ? AND m.receiver_id = ?)
+          OR (m.sender_id = ? AND m.receiver_id = ?))
+         ${beforeFilter}
+     ${order}
+     ${paginated ? "LIMIT ?" : ""}`,
+    queryParams,
   );
-  return rows.map(mapMessage);
+  if (!paginated) return rows.map(mapMessage);
+  const hasMore = rows.length > pagination.limit;
+  return {
+    messages: rows.slice(0, pagination.limit).map(mapMessage),
+    hasMore,
+  };
 }
 
 async function markMessagesRead(userId, senderId) {
+  const columns = await requireMessageColumns();
+  const readAtUpdate = columns.includes("read_at")
+    ? ", read_at = CURRENT_TIMESTAMP"
+    : "";
   const [result] = await db.query(
-    `UPDATE messages SET is_read = 1
+    `UPDATE messages SET is_read = 1${readAtUpdate}
      WHERE receiver_id = ? AND sender_id = ? AND is_read = 0`,
     [userId, senderId],
   );

@@ -15,6 +15,7 @@ const closeFriendRoutes = require("./routes/closeFriendRoutes");
 const searchRoutes = require("./routes/searchRoutes");
 const exploreController = require("./controllers/exploreController");
 const commentRoutes = require("./routes/commentRoutes");
+const repostRoutes = require("./routes/repostRoutes");
 
 const app = express();
 
@@ -33,10 +34,15 @@ app.use("/api/stories", storyRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/comments", commentRoutes);
+app.use("/api/reposts", repostRoutes);
 app.use("/api/saved-items", savedItemRoutes);
 app.use("/api/saved", savedItemRoutes);
 app.use("/api/search", searchRoutes);
-app.get("/api/explore", require("./middleware/authMiddleware"), exploreController.getExplore);
+app.get(
+  "/api/explore",
+  require("./middleware/authMiddleware"),
+  exploreController.getExplore,
+);
 
 // Provide a lightweight endpoint for Render health checks
 app.get("/health", (req, res) => {

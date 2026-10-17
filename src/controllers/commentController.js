@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const notificationModel = require("../models/notificationModel");
+const postModel = require("../models/postModel");
 
 function parseId(value) {
   const id = Number(value);
@@ -55,6 +56,36 @@ async function toggleLike(req, res) {
   }
 }
 
+async function pinComment(req, res) {
+  const commentId = parseId(req.params.commentId);
+  const userId = parseId(req.user?.id);
+  if (!commentId || !userId) {
+    return res.status(400).json({ success: false, message: "Valid comment and user IDs are required" });
+  }
+  try {
+    await postModel.pinComment(commentId, userId);
+    return res.json({ success: true, message: "Comment pinned successfully" });
+  } catch (error) {
+    console.error("Pin comment error:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to pin comment" });
+  }
+}
+
+async function getReplies(req, res) {
+  const commentId = parseId(req.params.commentId);
+  const viewerId = parseId(req.user?.id);
+  if (!commentId) {
+    return res.status(400).json({ success: false, message: "Valid comment ID is required" });
+  }
+  try {
+    const replies = await postModel.getRepliesByCommentId(commentId, viewerId);
+    return res.json({ success: true, data: replies });
+  } catch (error) {
+    console.error("Get replies error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch replies", data: [] });
+  }
+}
+
 async function updateComment(req, res) {
   const commentId = parseId(req.params.commentId);
   const userId = parseId(req.user?.id);
@@ -106,4 +137,4 @@ async function deleteComment(req, res) {
   }
 }
 
-module.exports = { toggleLike, updateComment, deleteComment };
+module.exports = { toggleLike, pinComment, getReplies, updateComment, deleteComment };
