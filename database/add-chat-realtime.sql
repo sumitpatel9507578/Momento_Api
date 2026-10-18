@@ -97,7 +97,7 @@ BEGIN
     HAVING MIN(non_unique) = 0
        AND GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',')
            = 'sender_id,client_message_id'
-  ) AS client_id_indexes;
+  ) AS client_id_indexes; 
   IF matching_index_count = 0 THEN
     ALTER TABLE messages
       ADD UNIQUE KEY uq_messages_sender_client_id (sender_id, client_message_id);

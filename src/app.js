@@ -16,10 +16,23 @@ const searchRoutes = require("./routes/searchRoutes");
 const exploreController = require("./controllers/exploreController");
 const commentRoutes = require("./routes/commentRoutes");
 const repostRoutes = require("./routes/repostRoutes");
+const reportRoutes = require("./routes/reportRoutes");
 
 const app = express();
 
 app.use(cors());
+app.use(
+  "/api/reports",
+  express.json({ limit: "8kb" }),
+  express.urlencoded({ extended: true, limit: "8kb" }),
+  reportRoutes.userRoutes,
+);
+app.use(
+  "/api/admin/reports",
+  express.json({ limit: "8kb" }),
+  express.urlencoded({ extended: true, limit: "8kb" }),
+  reportRoutes.adminRoutes,
+);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -61,6 +74,34 @@ app.get("/", (req, res) => {
 });
 
 app.use((error, req, res, next) => {
+  const isReportRequest =
+    req.originalUrl.startsWith("/api/reports") ||
+    req.originalUrl.startsWith("/api/admin/reports");
+  if (!isReportRequest) return next(error);
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({
+      success: false,
+      message: "Report request payload is too large.",
+    });
+  }
+  if (
+    error instanceof SyntaxError &&
+    error.status === 400 &&
+    Object.prototype.hasOwnProperty.call(error, "body")
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Report request body must contain valid JSON",
+    });
+  }
+  console.error("Report request parsing error:", error.code || error.message);
+  return res.status(400).json({
+    success: false,
+    message: "Invalid report request",
+  });
+});
+
+app.use((error, req, res, next) => {
   if (error.code === "LIMIT_FILE_SIZE") {
     return res.status(413).json({
       success: false,
@@ -72,7 +113,10 @@ app.use((error, req, res, next) => {
     return res.status(413).json({
       success: false,
       message:
-        "Request payload is too large. Send reels as multipart/form-data.",
+        req.originalUrl.startsWith("/api/reports") ||
+        req.originalUrl.startsWith("/api/admin/reports")
+          ? "Report request payload is too large."
+          : "Request payload is too large. Send reels as multipart/form-data.",
     });
   }
 
