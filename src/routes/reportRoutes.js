@@ -11,5 +11,6 @@ adminRoutes.use(authMiddleware, adminMiddleware);
 adminRoutes.get("/", reportController.listReports);
 adminRoutes.get("/:id", reportController.getReport);
 adminRoutes.patch("/:id/status", reportController.updateReportStatus);
+adminRoutes.post("/action", reportController.reviewReportAction);
 
 module.exports = { userRoutes, adminRoutes };

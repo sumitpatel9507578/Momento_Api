@@ -12,19 +12,56 @@ async function register(req, res) {
   try {
     const { username, email, password } = req.body;
     const deviceToken = req.body.deviceToken || req.body.device_token || null;
+    let assignedRole = "user";
 
     // Support all possible name field formats from client (fullName, full_name, name)
     const fullName =
       req.body.fullName || req.body.full_name || req.body.name || "";
 
-    if (!username || !email || !password) {
+    if (
+      typeof username !== "string" ||
+      !username.trim() ||
+      typeof email !== "string" ||
+      !email.trim() ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return res.status(400).json({
         success: false,
         message: "Required fields missing (username, email, password)",
       });
     }
 
-    const existingUser = await userModel.getUserByEmail(email);
+    if (req.body.registrationType === "admin") {
+      const configuredAdminCode = process.env.ADMIN_REGISTRATION_CODE?.trim();
+      if (!configuredAdminCode) {
+        return res.status(500).json({
+          success: false,
+          message: "Server configuration error: admin registration is unavailable",
+        });
+      }
+
+      const suppliedAdminCode =
+        typeof req.body.adminCode === "string" ? req.body.adminCode.trim() : "";
+      const suppliedCodeBuffer = Buffer.from(suppliedAdminCode);
+      const configuredCodeBuffer = Buffer.from(configuredAdminCode);
+      const isValidAdminCode =
+        suppliedCodeBuffer.length === configuredCodeBuffer.length &&
+        crypto.timingSafeEqual(suppliedCodeBuffer, configuredCodeBuffer);
+
+      if (!isValidAdminCode) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: Invalid or missing admin authorization code",
+        });
+      }
+
+      assignedRole = "admin";
+    }
+
+    const normalizedEmail = email.trim();
+    const normalizedUsername = username.trim();
+    const existingUser = await userModel.getUserByEmail(normalizedEmail);
     if (existingUser)
       return res
         .status(400)
@@ -44,23 +81,29 @@ async function register(req, res) {
     }
 
     const id = await userModel.createUser(
-      username,
-      email,
+      normalizedUsername,
+      normalizedEmail,
       hashedPassword,
       fullName,
       profileImage,
       deviceToken,
+      assignedRole,
     );
     console.log("[AUTH] User created in DB with ID:", id);
 
     const user = await userModel.getUserById(id);
     const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email },
+      {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role || assignedRole,
+      },
       process.env.JWT_SECRET || "momento_fallback_secret",
       { expiresIn: "7d" },
     );
     const refreshToken = jwt.sign(
-      { id: user.id, username: user.username },
+      { id: user.id, username: user.username, role: user.role || assignedRole },
       process.env.JWT_REFRESH_SECRET ||
         process.env.JWT_SECRET ||
         "momento_fallback_secret",
@@ -113,12 +156,17 @@ async function login(req, res) {
 
     const user = await userModel.getUserById(userInDb.id);
     const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email },
+      {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role || "user",
+      },
       process.env.JWT_SECRET || "momento_fallback_secret",
       { expiresIn: "7d" },
     );
     const refreshToken = jwt.sign(
-      { id: user.id, username: user.username },
+      { id: user.id, username: user.username, role: user.role || "user" },
       process.env.JWT_REFRESH_SECRET ||
         process.env.JWT_SECRET ||
         "momento_fallback_secret",
@@ -156,12 +204,17 @@ async function refresh(req, res) {
       return res.status(401).json({ success: false, message: "Invalid refresh token" });
     }
     const accessToken = jwt.sign(
-      { id: user.id, username: user.username, email: user.email },
+      {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role || "user",
+      },
       process.env.JWT_SECRET || "momento_fallback_secret",
       { expiresIn: "7d" },
     );
     const rotatedRefreshToken = jwt.sign(
-      { id: user.id, username: user.username },
+      { id: user.id, username: user.username, role: user.role || "user" },
       secret,
       { expiresIn: "30d" },
     );

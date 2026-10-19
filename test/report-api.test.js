@@ -628,3 +628,39 @@ test("admin status changes enforce transitions and write durable review history"
     ],
   );
 });
+
+test("admin report action resolves or dismisses reports using the action endpoint", async () => {
+  for (const [targetId, action, expectedStatus] of [
+    [51, "resolve", "resolved"],
+    [52, "dismiss", "dismissed"],
+  ]) {
+    const submitted = await request("/api/reports", {
+      method: "POST",
+      body: JSON.stringify({
+        target_type: "post",
+        target_id: targetId,
+        reason: "spam",
+      }),
+    });
+    assert.equal(submitted.status, 201);
+
+    const response = await request("/api/admin/reports/action", {
+      method: "POST",
+      authUserId: 99,
+      body: JSON.stringify({
+        report_id: storedReports.at(-1).id,
+        action,
+        admin_note: "Reviewed",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(storedReports.at(-1).status, expectedStatus);
+  }
+
+  const invalid = await request("/api/admin/reports/action", {
+    method: "POST",
+    authUserId: 99,
+    body: JSON.stringify({ report_id: 1, action: "ignore" }),
+  });
+  assert.equal(invalid.status, 400);
+});

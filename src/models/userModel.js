@@ -23,6 +23,7 @@ async function createUser(
   name = null,
   profileImage = null,
   deviceToken = null,
+  role = "user",
 ) {
   const cols = await getTableInfo();
 
@@ -54,6 +55,14 @@ async function createUser(
     insertColumns.push("device_token");
     params.push(deviceToken);
   }
+  if (cols.includes("role")) {
+    insertColumns.push("role");
+    params.push(role);
+  } else if (role === "admin") {
+    throw new Error(
+      "Cannot register an admin because the users table is missing the role column.",
+    );
+  }
 
   const placeholders = params.map(() => "?").join(", ");
   const finalQuery = `INSERT INTO users (${insertColumns.join(", ")}) VALUES (${placeholders})`;
@@ -84,6 +93,7 @@ async function getUserById(id) {
     showActivityStatus: user.show_activity_status === undefined
       ? true
       : Boolean(user.show_activity_status),
+    isVerified: Boolean(user.is_verified),
     role: user.role || "user",
     profileCompleted: Boolean(user.profile_completed),
     createdAt: user.created_at || user.createdAt || null,

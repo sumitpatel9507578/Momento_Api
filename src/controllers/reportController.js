@@ -231,8 +231,14 @@ async function getReport(req, res) {
 }
 
 async function updateReportStatus(req, res) {
-  const reportId = req.params.id;
-  const status = req.body?.status;
+  const reportId = req.params.id ?? req.body?.report_id;
+  const status =
+    req.body?.status ??
+    (req.body?.action === "resolve"
+      ? "resolved"
+      : req.body?.action === "dismiss"
+        ? "dismissed"
+        : undefined);
   const adminNote = req.body?.admin_note;
   if (
     !isValidId(reportId) ||
@@ -285,9 +291,20 @@ async function updateReportStatus(req, res) {
   }
 }
 
+async function reviewReportAction(req, res) {
+  if (!["resolve", "dismiss"].includes(req.body?.action)) {
+    return res.status(400).json({
+      success: false,
+      message: "action must be either resolve or dismiss",
+    });
+  }
+  return updateReportStatus(req, res);
+}
+
 module.exports = {
   createReport,
   listReports,
   getReport,
   updateReportStatus,
+  reviewReportAction,
 };
