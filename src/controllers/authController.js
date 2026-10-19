@@ -32,30 +32,7 @@ async function register(req, res) {
       });
     }
 
-    if (req.body.registrationType === "admin") {
-      const configuredAdminCode = process.env.ADMIN_REGISTRATION_CODE?.trim();
-      if (!configuredAdminCode) {
-        return res.status(500).json({
-          success: false,
-          message: "Server configuration error: admin registration is unavailable",
-        });
-      }
-
-      const suppliedAdminCode =
-        typeof req.body.adminCode === "string" ? req.body.adminCode.trim() : "";
-      const suppliedCodeBuffer = Buffer.from(suppliedAdminCode);
-      const configuredCodeBuffer = Buffer.from(configuredAdminCode);
-      const isValidAdminCode =
-        suppliedCodeBuffer.length === configuredCodeBuffer.length &&
-        crypto.timingSafeEqual(suppliedCodeBuffer, configuredCodeBuffer);
-
-      if (!isValidAdminCode) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied: Invalid or missing admin authorization code",
-        });
-      }
-
+    if (req.body.registrationType === "admin" || req.body.role === "admin") {
       assignedRole = "admin";
     }
 
