@@ -8,7 +8,10 @@ router.use(authMiddleware, adminMiddleware);
 
 router.get("/stats", async (req, res) => {
   try {
-    const [userRows] = await db.query("SELECT COUNT(*) AS total FROM users");
+    // Count only regular users (exclude admins)
+    const [userRows] = await db.query(
+      "SELECT COUNT(*) AS total FROM users WHERE role = 'user' OR role IS NULL OR role != 'admin'"
+    );
     const [postRows] = await db.query("SELECT COUNT(*) AS total FROM posts");
     const [reelRows] = await db.query("SELECT COUNT(*) AS total FROM reels");
     const [storyRows] = await db.query("SELECT COUNT(*) AS total FROM stories");
