@@ -19,6 +19,7 @@ const repostRoutes = require("./routes/repostRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const adminVerificationRoutes = require("./routes/adminVerificationRoutes");
+const adminDashboardRoutes = require("./routes/adminDashboardRoutes");
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.use("/api/verification", verificationRoutes);
 app.use("/api/admin/verification", adminVerificationRoutes);
+app.use("/api/admin/dashboard", adminDashboardRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/follows", followRoutes);
