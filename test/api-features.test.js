@@ -55,6 +55,7 @@ let storedMessages = [];
 let storedLikes = [];
 let storedStories = [];
 let storedStoryLikes = [];
+let storedStoryViews = [];
 let storedReposts = [];
 let savedMessages = [];
 let savedReels = [];
@@ -697,13 +698,21 @@ async function fakeQuery(sql, params = []) {
   if (normalizedSql.startsWith("INSERT INTO stories")) {
     const [userId, mediaUrl, mediaType, caption, expiresAt] = params;
     const id = nextStoryId++;
-    storedStories.push({ id, userId, mediaUrl, mediaType, caption, expiresAt });
+    storedStories.push({
+      id,
+      userId,
+      mediaUrl,
+      mediaType,
+      caption,
+      expiresAt,
+      createdAt: new Date(),
+    });
     return [{ insertId: id }, []];
   }
 
   if (
     normalizedSql.startsWith(
-      "SELECT s.user_id AS ownerId, sl.user_id AS likedByUser",
+      "SELECT s.user_id AS ownerId, sl.user_id AS likedByUser,",
     )
   ) {
     const [userId, storyId] = params.map(Number);
@@ -715,7 +724,12 @@ async function fakeQuery(sql, params = []) {
       (like) => like.story_id === storyId && like.user_id === userId,
     );
     return [
-      [{ ownerId: story.userId, likedByUser: liked ? userId : null }],
+      [{
+        ownerId: story.userId,
+        likedByUser: liked ? userId : null,
+        likesCount: storedStoryLikes.filter((like) => like.story_id === storyId)
+          .length,
+      }],
       [],
     ];
   }
@@ -726,6 +740,18 @@ async function fakeQuery(sql, params = []) {
     return [{ affectedRows: 1 }, []];
   }
 
+  if (normalizedSql.startsWith("DELETE FROM stories WHERE id = ?")) {
+    const storyId = Number(params[0]);
+    const userId = params.length > 1 ? Number(params[1]) : null;
+    const previousLength = storedStories.length;
+    storedStories = storedStories.filter(
+      (story) =>
+        story.id !== storyId ||
+        (userId !== null && story.userId !== userId),
+    );
+    return [{ affectedRows: previousLength - storedStories.length }, []];
+  }
+
   if (normalizedSql.startsWith("DELETE FROM story_likes")) {
     const [storyId, userId] = params.map(Number);
     const previousLength = storedStoryLikes.length;
@@ -733,6 +759,122 @@ async function fakeQuery(sql, params = []) {
       (like) => like.story_id !== storyId || like.user_id !== userId,
     );
     return [{ affectedRows: previousLength - storedStoryLikes.length }, []];
+  }
+
+  if (
+    normalizedSql.startsWith(
+      "SELECT id, user_id FROM stories WHERE id = ? AND expires_at > NOW()",
+    )
+  ) {
+    const [storyId] = params.map(Number);
+    const story = storedStories.find((item) => item.id === storyId);
+    return [
+      story && new Date(story.expiresAt).getTime() > Date.now()
+        ? [{ id: story.id, user_id: story.userId }]
+        : [],
+      [],
+    ];
+  }
+
+  if (normalizedSql.startsWith("INSERT IGNORE INTO story_views")) {
+    const [storyId, userId] = params.map(Number);
+    if (
+      !storedStoryViews.some(
+        (view) => view.story_id === storyId && view.user_id === userId,
+      )
+    ) {
+      storedStoryViews.push({
+        story_id: storyId,
+        user_id: userId,
+        viewed_at: new Date(),
+      });
+    }
+    return [{ affectedRows: 1 }, []];
+  }
+
+  if (
+    normalizedSql.startsWith(
+      "SELECT user_id AS ownerId FROM stories WHERE id = ?",
+    )
+  ) {
+    const [storyId] = params.map(Number);
+    const story = storedStories.find((item) => item.id === storyId);
+    return [
+      story && new Date(story.expiresAt).getTime() > Date.now()
+        ? [{ ownerId: story.userId }]
+        : [],
+      [],
+    ];
+  }
+
+  if (normalizedSql.startsWith("SELECT id FROM stories WHERE id = ?")) {
+    const [storyId] = params.map(Number);
+    const story = storedStories.find((item) => item.id === storyId);
+    return [story ? [{ id: story.id }] : [], []];
+  }
+
+  if (normalizedSql.startsWith("SELECT sv.story_id AS storyId, u.id,")) {
+    const storyIds = params.map(Number);
+    return [
+      storedStoryViews
+        .filter((view) => storyIds.includes(view.story_id))
+        .map((view) => ({
+          storyId: view.story_id,
+          id: view.user_id,
+          name: `User ${view.user_id}`,
+          username: `user-${view.user_id}`,
+          profileImage: "",
+          viewedAt: view.viewed_at,
+          liked: storedStoryLikes.some(
+            (like) =>
+              like.story_id === view.story_id &&
+              like.user_id === view.user_id,
+          ),
+        }))
+        .sort((left, right) => right.viewedAt - left.viewedAt),
+      [],
+    ];
+  }
+
+  if (normalizedSql.startsWith("SELECT s.*, u.username,")) {
+    const [viewerId] = params.map(Number);
+    const now = Date.now();
+    return [
+      storedStories
+        .filter(
+          (story) =>
+            new Date(story.expiresAt).getTime() > now &&
+            story.createdAt &&
+            new Date(story.createdAt).getTime() >= now - 24 * 60 * 60 * 1000,
+        )
+        .map((story) => ({
+          id: story.id,
+          user_id: story.userId,
+          media_url: story.mediaUrl,
+          media_type: story.mediaType,
+          caption: story.caption,
+          expires_at: story.expiresAt,
+          created_at: story.createdAt,
+          profile_image: "",
+          username: `user-${story.userId}`,
+          name: `User ${story.userId}`,
+          likesCount: storedStoryLikes.filter(
+            (like) => like.story_id === story.id,
+          ).length,
+          viewsCount: storedStoryViews.filter(
+            (view) => view.story_id === story.id,
+          ).length,
+          viewed: storedStoryViews.some(
+            (view) =>
+              view.story_id === story.id && view.user_id === viewerId,
+          ),
+          isLiked: storedStoryLikes.some(
+            (like) =>
+              like.story_id === story.id && like.user_id === viewerId,
+          ),
+        })),
+      [],
+    ];
   }
 
   if (normalizedSql.startsWith("SELECT s.*, u.username")) {
@@ -792,6 +934,7 @@ beforeEach(() => {
   storedLikes = [];
   storedStories = [];
   storedStoryLikes = [];
+  storedStoryViews = [];
   storedReposts = [];
   savedMessages = [];
   savedReels = [];
@@ -1371,27 +1514,101 @@ test("reel-like aliases use reel_id, toggle state, and never create post likes",
   assert.equal(storedLikes.at(-1).reel_id, null);
 });
 
-test("story likes toggle only for active stories", async () => {
+test("story endpoints report likes, views, viewers, and enforce story deletion ownership", async () => {
   storedStories.push({
     id: 21,
     userId: 11,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    createdAt: new Date(),
   });
 
   const liked = await request("/api/stories/21/like", { method: "POST" });
-  assert.equal(liked.status, 201);
-  assert.equal((await liked.json()).isLiked, true);
+  assert.equal(liked.status, 200);
+  assert.deepEqual(await liked.json(), {
+    success: true,
+    isLiked: true,
+    likesCount: 1,
+  });
   assert.deepEqual(storedStoryLikes, [{ story_id: 21, user_id: 7 }]);
 
   const unliked = await request("/api/stories/21/like", { method: "POST" });
   assert.equal(unliked.status, 200);
-  assert.equal((await unliked.json()).isLiked, false);
+  assert.deepEqual(await unliked.json(), {
+    success: true,
+    isLiked: false,
+    likesCount: 0,
+  });
   assert.deepEqual(storedStoryLikes, []);
+
+  const viewed = await request("/api/stories/21/view", { method: "PUT" });
+  assert.equal(viewed.status, 200);
+  assert.deepEqual(await viewed.json(), { success: true });
+  await request("/api/stories/21/view", { method: "PUT" });
+  assert.equal(storedStoryViews.length, 1);
+
+  const forbiddenViewers = await request("/api/stories/21/viewers");
+  assert.equal(forbiddenViewers.status, 403);
+
+  const viewersResponse = await request("/api/stories/21/viewers", {
+    authUserId: 11,
+  });
+  assert.equal(viewersResponse.status, 200);
+  assert.deepEqual((await viewersResponse.json()).viewers, [
+    {
+      id: 7,
+      name: "User 7",
+      username: "user-7",
+      profileImage: "",
+      viewedAt: storedStoryViews[0].viewed_at.toISOString(),
+      liked: false,
+    },
+  ]);
+
+  const storiesResponse = await request("/api/stories");
+  assert.equal(storiesResponse.status, 200);
+  const [story] = (await storiesResponse.json()).data;
+  assert.equal(story.id, 21);
+  assert.equal(story.viewed, true);
+  assert.equal(story.isLiked, false);
+  assert.equal(story.likesCount, 0);
+  assert.equal(story.viewsCount, 1);
+  assert.equal(story.viewers.length, 1);
 
   const missingStory = await request("/api/stories/404/like", {
     method: "POST",
   });
   assert.equal(missingStory.status, 404);
+  assert.equal(
+    (await request("/api/stories/404/viewers")).status,
+    404,
+  );
+  assert.equal(
+    (
+      await request("/api/stories/21", {
+        method: "DELETE",
+        authUserId: 8,
+      })
+    ).status,
+    403,
+  );
+  const deleted = await request("/api/stories/21", {
+    method: "DELETE",
+    authUserId: 11,
+  });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), {
+    success: true,
+    message: "Story deleted successfully",
+  });
+  assert.equal(
+    (
+      await request("/api/stories/21", {
+        method: "DELETE",
+        authUserId: 11,
+      })
+    ).status,
+    404,
+  );
 
   const invalidId = await request("/api/stories/not-an-id/like", {
     method: "POST",
@@ -1402,6 +1619,29 @@ test("story likes toggle only for active stories", async () => {
     method: "POST",
   });
   assert.equal(unauthenticated.status, 401);
+});
+
+test("stories accept valid base64 media with a matching media type", async () => {
+  const response = await request("/api/stories", {
+    method: "POST",
+    body: JSON.stringify({
+      mediaUrl: "data:image/png;base64,aGVsbG8=",
+      mediaType: "image",
+      caption: "base64 story",
+    }),
+  });
+  assert.equal(response.status, 201);
+  assert.equal(storedStories[0].mediaUrl, "data:image/png;base64,aGVsbG8=");
+  assert.equal(storedStories[0].caption, "base64 story");
+
+  const invalidMedia = await request("/api/stories", {
+    method: "POST",
+    body: JSON.stringify({
+      mediaUrl: "data:video/mp4;base64,aGVsbG8=",
+      mediaType: "image",
+    }),
+  });
+  assert.equal(invalidMedia.status, 400);
 });
 
 test("reposts support posts and reels, are idempotent, and can only be removed by their owner", async () => {
@@ -1599,6 +1839,25 @@ test("post captions and deletion are available only through the authenticated en
   assert.equal(
     (await request("/api/posts/12", { method: "DELETE" })).status,
     404,
+  );
+
+  storedStories.push({
+    id: 22,
+    userId: 12,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    createdAt: new Date(),
+  });
+  const adminDelete = await request("/api/stories/22", {
+    method: "DELETE",
+    authToken: `Bearer ${jwt.sign(
+      { id: 99, role: "admin" },
+      process.env.JWT_SECRET,
+    )}`,
+  });
+  assert.equal(adminDelete.status, 200);
+  assert.equal(
+    storedStories.some((story) => story.id === 22),
+    false,
   );
 });
 
@@ -1844,6 +2103,16 @@ test("story uploads persist Cloudinary URLs, list active stories, and reject inv
   const stories = (await active.json()).data;
   assert.equal(stories.length, 3);
   assert.ok(stories.every((story) => new Date(story.expires_at) > new Date()));
+  assert.ok(
+    stories.every(
+      (story) =>
+        typeof story.viewed === "boolean" &&
+        typeof story.isLiked === "boolean" &&
+        typeof story.likesCount === "number" &&
+        typeof story.viewsCount === "number" &&
+        Array.isArray(story.viewers),
+    ),
+  );
 });
 
 test("local health endpoint responds successfully", async () => {

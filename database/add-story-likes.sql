@@ -1,4 +1,7 @@
 -- Run once against the database used by the API.
+ALTER TABLE stories
+  MODIFY COLUMN media_url MEDIUMTEXT NOT NULL;
+
 CREATE TABLE IF NOT EXISTS story_likes (
   story_id BIGINT(20) NOT NULL,
   user_id BIGINT(20) NOT NULL,

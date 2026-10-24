@@ -211,22 +211,41 @@ async function createStory(req, res) {
       resolvedMediaType = uploadedMediaType;
     }
 
-    if (typeof mediaUrl !== "string" || mediaUrl.length > 2000) {
+    if (typeof mediaUrl !== "string" || mediaUrl.length > 14_000_000) {
       return res.status(400).json({
         success: false,
         message: "A valid mediaUrl or uploaded story file is required",
       });
     }
-    try {
-      const parsedMediaUrl = new URL(mediaUrl);
-      if (!["http:", "https:"].includes(parsedMediaUrl.protocol)) {
-        throw new Error("Unsupported media URL protocol");
+    if (mediaUrl.startsWith("data:")) {
+      const dataUrl = mediaUrl.match(
+        /^data:(image\/(?:jpeg|png|gif|webp|avif)|video\/(?:mp4|webm|quicktime));base64,([A-Za-z0-9+/]*={0,2})$/,
+      );
+      if (
+        !dataUrl ||
+        dataUrl[2].length === 0 ||
+        dataUrl[2].length % 4 === 1 ||
+        Buffer.from(dataUrl[2], "base64").length > 10 * 1024 * 1024 ||
+        (dataUrl[1].startsWith("image/") && resolvedMediaType !== "image") ||
+        (dataUrl[1].startsWith("video/") && resolvedMediaType !== "video")
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "mediaUrl must be a valid base64 image or video matching mediaType",
+        });
       }
-    } catch {
-      return res.status(400).json({
-        success: false,
-        message: "mediaUrl must be a valid HTTP or HTTPS URL",
-      });
+    } else {
+      try {
+        const parsedMediaUrl = new URL(mediaUrl);
+        if (!["http:", "https:"].includes(parsedMediaUrl.protocol)) {
+          throw new Error("Unsupported media URL protocol");
+        }
+      } catch {
+        return res.status(400).json({
+          success: false,
+          message: "mediaUrl must be a valid HTTP or HTTPS URL",
+        });
+      }
     }
 
     if (!["image", "video"].includes(resolvedMediaType)) {
@@ -324,7 +343,7 @@ async function createStory(req, res) {
       userId,
       mediaUrl,
       resolvedMediaType,
-      caption,
+      caption ?? "",
       expiration,
       {
         layers: parsedLayers,
@@ -360,7 +379,7 @@ async function viewStory(req, res) {
   try {
     const viewed = await postModel.markStoryViewed(storyId, Number(req.user.id));
     if (!viewed) return res.status(404).json({ success: false, message: "Active story not found" });
-    return res.json({ success: true, message: "Story marked as viewed" });
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error("Mark story viewed error:", error);
     return res.status(500).json({ success: false, message: "Failed to mark story as viewed" });
@@ -390,14 +409,36 @@ async function likeStory(req, res) {
 
     if (likeStatus.likedByUser !== null) {
       await postModel.deleteStoryLike(storyId, userId);
+      const updatedLikeStatus = await postModel.getStoryLikeStatus(
+        storyId,
+        userId,
+      );
+      if (!updatedLikeStatus) {
+        return res.status(404).json({
+          success: false,
+          message: "Active story not found",
+          isLiked: false,
+        });
+      }
       return res.status(200).json({
         success: true,
-        message: "Story unliked",
         isLiked: false,
+        likesCount: Number(updatedLikeStatus.likesCount) || 0,
       });
     }
 
     await postModel.createStoryLike(storyId, userId);
+    const updatedLikeStatus = await postModel.getStoryLikeStatus(
+      storyId,
+      userId,
+    );
+    if (!updatedLikeStatus) {
+      return res.status(404).json({
+        success: false,
+        message: "Active story not found",
+        isLiked: false,
+      });
+    }
     await notificationModel.createNotification(
       likeStatus.ownerId,
       userId,
@@ -405,10 +446,10 @@ async function likeStory(req, res) {
       "story",
       storyId,
     );
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
-      message: "Story liked",
-      isLiked: true,
+      isLiked: updatedLikeStatus.likedByUser !== null,
+      likesCount: Number(updatedLikeStatus.likesCount) || 0,
     });
   } catch (error) {
     console.error("Story like error:", error);
@@ -427,15 +468,67 @@ async function likeStory(req, res) {
   }
 }
 
+async function getStoryViewers(req, res) {
+  const storyId = Number(req.params.storyId);
+  if (!Number.isSafeInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "A valid story ID is required",
+    });
+  }
+
+  try {
+    const viewers = await postModel.getStoryViewers(
+      storyId,
+      Number(req.user.id),
+      req.user.role === "admin",
+    );
+    if (viewers === null) {
+      return res.status(404).json({
+        success: false,
+        message: "Active story not found",
+      });
+    }
+    if (viewers === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the story owner or an admin can view story viewers",
+      });
+    }
+    return res.status(200).json({ success: true, viewers });
+  } catch (error) {
+    console.error("Get story viewers error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch story viewers",
+    });
+  }
+}
+
 async function deleteStory(req, res) {
   const storyId = Number(req.params.storyId);
   if (!Number.isSafeInteger(storyId) || storyId <= 0) {
     return res.status(400).json({ success: false, message: "A valid story ID is required" });
   }
   try {
-    const deleted = await postModel.deleteStory(storyId, Number(req.user.id));
-    if (!deleted) return res.status(404).json({ success: false, message: "Story not found" });
-    return res.json({ success: true, message: "Story deleted successfully" });
+    const result = await postModel.deleteStory(
+      storyId,
+      Number(req.user.id),
+      req.user.role === "admin",
+    );
+    if (result === "not_found") {
+      return res.status(404).json({ success: false, message: "Story not found" });
+    }
+    if (result === "forbidden") {
+      return res.status(403).json({
+        success: false,
+        message: "You can only delete your own story",
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Story deleted successfully",
+    });
   } catch (error) {
     console.error("Delete story error:", error);
     return res.status(500).json({ success: false, message: "Failed to delete story" });
@@ -452,5 +545,6 @@ module.exports = {
   createStory,
   viewStory,
   likeStory,
+  getStoryViewers,
   deleteStory,
 };

@@ -475,7 +475,14 @@ async function createStory(
 
 async function getActiveStories(viewerId) {
   const storyCols = await getTableCols("stories");
-  const requiredColumns = ["user_id", "media_url", "media_type", "expires_at"];
+  const requiredColumns = [
+    "id",
+    "user_id",
+    "media_url",
+    "media_type",
+    "expires_at",
+    "created_at",
+  ];
   const missingColumns = requiredColumns.filter(
     (column) => !storyCols.includes(column),
   );
@@ -497,14 +504,31 @@ async function getActiveStories(viewerId) {
   const profileImageSelect = profileImageColumn
     ? `u.${profileImageColumn}`
     : "NULL";
+  const nameColumn = userCols.includes("full_name")
+    ? "full_name"
+    : userCols.includes("name")
+      ? "name"
+      : null;
+  const nameSelect = nameColumn ? `u.${nameColumn}` : "''";
 
   const [rows] = await db.query(
-    `SELECT s.*, u.username, ${profileImageSelect} AS profile_image,
+    `SELECT s.*, u.username, ${nameSelect} AS name,
+            ${profileImageSelect} AS profile_image,
+            (SELECT COUNT(*) FROM story_likes sl
+             WHERE sl.story_id = s.id) AS likesCount,
+            (SELECT COUNT(*) FROM story_views sv
+             WHERE sv.story_id = s.id) AS viewsCount,
+            EXISTS (SELECT 1 FROM story_views viewer
+                    WHERE viewer.story_id = s.id AND viewer.user_id = ?) AS viewed,
+            EXISTS (SELECT 1 FROM story_likes viewer_like
+                    WHERE viewer_like.story_id = s.id
+                      AND viewer_like.user_id = ?) AS isLiked,
             (SELECT JSON_ARRAYAGG(sm.user_id)
              FROM story_mentions sm WHERE sm.story_id = s.id) AS mentions
      FROM stories s
      JOIN users u ON u.id = s.user_id
      WHERE s.expires_at > NOW()
+       AND s.created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
        AND (
          s.user_id = ?
          OR (
@@ -522,26 +546,106 @@ async function getActiveStories(viewerId) {
          WHERE shu.story_id = s.id AND shu.user_id = ?
        )
      ORDER BY s.created_at DESC, s.id DESC`,
-    [viewerId, viewerId, viewerId, viewerId],
+    [viewerId, viewerId, viewerId, viewerId, viewerId, viewerId],
   );
-  return rows.map((s) => ({
-    ...s,
-    userId: s.user_id,
-    mediaUrl: s.media_url,
-    mediaType: s.media_type,
-    expiresAt: s.expires_at,
-    profileImage: s.profile_image || "",
+  const storyIds = rows.map((story) => story.id);
+  const viewerRows = await getStoryViewerRows(storyIds, userCols);
+  const viewersByStoryId = new Map();
+  for (const viewer of viewerRows) {
+    const viewers = viewersByStoryId.get(Number(viewer.storyId)) || [];
+    viewers.push(mapStoryViewer(viewer));
+    viewersByStoryId.set(Number(viewer.storyId), viewers);
+  }
+
+  return rows.map((story) => ({
+    ...story,
+    id: story.id,
+    userId: story.user_id,
+    username: story.username || "",
+    profileImage: story.profile_image || "",
+    mediaUrl: story.media_url,
+    mediaType: story.media_type,
+    createdAt: story.created_at,
+    expiresAt: story.expires_at,
+    viewed: Boolean(Number(story.viewed)),
+    isLiked: Boolean(Number(story.isLiked)),
+    likesCount: Number(story.likesCount) || 0,
+    viewsCount: Number(story.viewsCount) || 0,
+    viewers: viewersByStoryId.get(Number(story.id)) || [],
   }));
+}
+
+function mapStoryViewer(viewer) {
+  return {
+    id: viewer.id,
+    name: viewer.name || "",
+    username: viewer.username || "",
+    profileImage: viewer.profileImage || "",
+    viewedAt: viewer.viewedAt,
+    liked: Boolean(Number(viewer.liked)),
+  };
+}
+
+async function getStoryViewerRows(storyIds, userCols) {
+  if (storyIds.length === 0) return [];
+
+  const nameColumn = userCols.includes("full_name")
+    ? "full_name"
+    : userCols.includes("name")
+      ? "name"
+      : null;
+  const profileImageColumn = userCols.includes("profile_image")
+    ? "profile_image"
+    : userCols.includes("profileImage")
+      ? "profileImage"
+      : null;
+  const nameSelect = nameColumn ? `u.${nameColumn}` : "''";
+  const profileImageSelect = profileImageColumn
+    ? `u.${profileImageColumn}`
+    : "NULL";
+  const [rows] = await db.query(
+    `SELECT sv.story_id AS storyId, u.id, ${nameSelect} AS name,
+            u.username, ${profileImageSelect} AS profileImage,
+            sv.viewed_at AS viewedAt,
+            EXISTS (SELECT 1 FROM story_likes sl
+                    WHERE sl.story_id = sv.story_id
+                      AND sl.user_id = u.id) AS liked
+     FROM story_views sv
+     JOIN users u ON u.id = sv.user_id
+     WHERE sv.story_id IN (${storyIds.map(() => "?").join(", ")})
+     ORDER BY sv.viewed_at DESC`,
+    storyIds,
+  );
+  return rows;
+}
+
+async function getStoryViewers(storyId, requesterId, isAdmin = false) {
+  const [stories] = await db.query(
+    `SELECT user_id AS ownerId FROM stories
+     WHERE id = ? AND expires_at > NOW()
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
+    [storyId],
+  );
+  if (!stories[0]) return null;
+  if (!isAdmin && Number(stories[0].ownerId) !== Number(requesterId)) {
+    return false;
+  }
+
+  const userCols = await getTableCols("users");
+  const rows = await getStoryViewerRows([storyId], userCols);
+  return rows.map(mapStoryViewer);
 }
 
 async function markStoryViewed(storyId, viewerId) {
   const [rows] = await db.query(
-    "SELECT id, user_id FROM stories WHERE id = ? AND expires_at > NOW()",
+    `SELECT id, user_id FROM stories
+     WHERE id = ? AND expires_at > NOW()
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
     [storyId],
   );
   if (!rows[0]) return false;
   await db.query(
-    "INSERT INTO story_views (story_id, user_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE viewed_at = CURRENT_TIMESTAMP",
+    "INSERT IGNORE INTO story_views (story_id, user_id) VALUES (?, ?)",
     [storyId, viewerId],
   );
   return true;
@@ -549,11 +653,14 @@ async function markStoryViewed(storyId, viewerId) {
 
 async function getStoryLikeStatus(storyId, userId) {
   const [rows] = await db.query(
-    `SELECT s.user_id AS ownerId, sl.user_id AS likedByUser
+    `SELECT s.user_id AS ownerId, sl.user_id AS likedByUser,
+            (SELECT COUNT(*) FROM story_likes count_likes
+             WHERE count_likes.story_id = s.id) AS likesCount
      FROM stories s
      LEFT JOIN story_likes sl
        ON sl.story_id = s.id AND sl.user_id = ?
-     WHERE s.id = ? AND s.expires_at > NOW()`,
+     WHERE s.id = ? AND s.expires_at > NOW()
+       AND s.created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
     [userId, storyId],
   );
   return rows[0] || null;
@@ -573,12 +680,20 @@ async function deleteStoryLike(storyId, userId) {
   );
 }
 
-async function deleteStory(storyId, userId) {
+async function deleteStory(storyId, userId, isAdmin = false) {
   const [result] = await db.query(
-    "DELETE FROM stories WHERE id = ? AND user_id = ?",
-    [storyId, userId],
+    isAdmin
+      ? "DELETE FROM stories WHERE id = ?"
+      : "DELETE FROM stories WHERE id = ? AND user_id = ?",
+    isAdmin ? [storyId] : [storyId, userId],
   );
-  return result.affectedRows > 0;
+  if (result.affectedRows > 0) return "deleted";
+
+  const [stories] = await db.query("SELECT id FROM stories WHERE id = ?", [
+    storyId,
+  ]);
+  if (stories.length === 0) return "not_found";
+  return "forbidden";
 }
 
 async function requireMessageColumns() {
@@ -967,6 +1082,7 @@ module.exports = {
   deleteReel,
   createStory,
   getActiveStories,
+  getStoryViewers,
   markStoryViewed,
   getStoryLikeStatus,
   createStoryLike,

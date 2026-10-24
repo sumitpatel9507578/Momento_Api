@@ -4,6 +4,7 @@ const contentController = require("../controllers/contentController");
 const upload = require("../middleware/uploadMiddleware");
 
 router.get("/", authMiddleware, contentController.getStories);
+router.get("/:storyId/viewers", authMiddleware, contentController.getStoryViewers);
 router.post("/:storyId/like", authMiddleware, contentController.likeStory);
 router.put("/:storyId/view", authMiddleware, contentController.viewStory);
 router.delete("/:storyId", authMiddleware, contentController.deleteStory);
