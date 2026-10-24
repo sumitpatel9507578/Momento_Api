@@ -5,6 +5,7 @@ const userModel = require("../models/userModel");
 const { isValidMessageType } = require("../utils/messageTypes");
 
 const USER_ROOM_PREFIX = "user:";
+const PERSONAL_ROOM_PREFIX = "user_";
 const onlineUsers = new Map();
 const onlineVisibility = new Map();
 
@@ -46,7 +47,10 @@ function attachChatSocket(httpServer) {
       if (!user) {
         return next(new Error("ACCOUNT_NOT_FOUND"));
       }
+      socket.userId = userId;
       socket.data.userId = userId;
+      socket.data.userName = user.name || user.username || "";
+      socket.data.userAvatar = user.profileImage || "";
       socket.data.activityVisible =
         user.showActivityStatus === undefined
           ? true
@@ -62,7 +66,7 @@ function attachChatSocket(httpServer) {
   });
 
   io.on("connection", (socket) => {
-    const userId = socket.data.userId;
+    const userId = socket.userId;
     const userRoom = `${USER_ROOM_PREFIX}${userId}`;
     console.log(`Socket connected userId=${userId} socket.id=${socket.id}`);
     const userSockets = onlineUsers.get(userId) || new Set();
@@ -70,6 +74,54 @@ function attachChatSocket(httpServer) {
     userSockets.add(socket.id);
     onlineUsers.set(userId, userSockets);
     socket.join(userRoom);
+    socket.join(`${PERSONAL_ROOM_PREFIX}${userId}`);
+
+    socket.on("call:initiate", (payload) => {
+      const targetUserId = parseUserId(payload?.targetUserId);
+      if (!targetUserId || targetUserId === userId || payload?.offer == null)
+        return;
+      io.to(`${PERSONAL_ROOM_PREFIX}${targetUserId}`).emit("call:incoming", {
+        callerId: userId,
+        callerName: socket.data.userName,
+        callerAvatar: socket.data.userAvatar,
+        isAudioOnly: payload.isAudioOnly === true,
+        offer: payload.offer,
+      });
+    });
+
+    socket.on("call:accept", (payload) => {
+      const callerId = parseUserId(payload?.callerId);
+      if (!callerId || callerId === userId || payload?.answer == null) return;
+      io.to(`${PERSONAL_ROOM_PREFIX}${callerId}`).emit("call:accepted", {
+        answer: payload.answer,
+      });
+    });
+
+    socket.on("call:ice_candidate", (payload) => {
+      const targetUserId = parseUserId(payload?.targetUserId);
+      if (
+        !targetUserId ||
+        targetUserId === userId ||
+        payload?.candidate == null
+      )
+        return;
+      io.to(`${PERSONAL_ROOM_PREFIX}${targetUserId}`).emit(
+        "call:ice_candidate",
+        { candidate: payload.candidate },
+      );
+    });
+
+    socket.on("call:reject", (payload) => {
+      const callerId = parseUserId(payload?.callerId);
+      if (!callerId || callerId === userId) return;
+      io.to(`${PERSONAL_ROOM_PREFIX}${callerId}`).emit("call:rejected");
+    });
+
+    socket.on("call:end", (payload) => {
+      const targetUserId = parseUserId(payload?.targetUserId);
+      if (!targetUserId || targetUserId === userId) return;
+      io.to(`${PERSONAL_ROOM_PREFIX}${targetUserId}`).emit("call:ended");
+    });
 
     socket.emit(
       "presence:snapshot",

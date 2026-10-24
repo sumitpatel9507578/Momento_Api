@@ -1022,6 +1022,60 @@ test("chat sockets authenticate, persist, deliver, report typing, and acknowledg
     receiver.disconnect();
   });
 
+  assert.equal(
+    socketServer.sockets.sockets.get(sender.id).rooms.has("user_7"),
+    true,
+  );
+  const incomingCall = new Promise((resolve) =>
+    receiver.once("call:incoming", resolve),
+  );
+  sender.emit("call:initiate", {
+    targetUserId: 8,
+    isAudioOnly: true,
+    offer: { type: "offer", sdp: "offer-sdp" },
+  });
+  assert.deepEqual(await incomingCall, {
+    callerId: 7,
+    callerName: "user-7",
+    callerAvatar: "",
+    isAudioOnly: true,
+    offer: { type: "offer", sdp: "offer-sdp" },
+  });
+
+  const acceptedCall = new Promise((resolve) =>
+    sender.once("call:accepted", resolve),
+  );
+  receiver.emit("call:accept", {
+    callerId: 7,
+    answer: { type: "answer", sdp: "answer-sdp" },
+  });
+  assert.deepEqual(await acceptedCall, {
+    answer: { type: "answer", sdp: "answer-sdp" },
+  });
+
+  const receivedCandidate = new Promise((resolve) =>
+    receiver.once("call:ice_candidate", resolve),
+  );
+  sender.emit("call:ice_candidate", {
+    targetUserId: 8,
+    candidate: { candidate: "ice-candidate" },
+  });
+  assert.deepEqual(await receivedCandidate, {
+    candidate: { candidate: "ice-candidate" },
+  });
+
+  const rejectedCall = new Promise((resolve) =>
+    sender.once("call:rejected", resolve),
+  );
+  receiver.emit("call:reject", { callerId: 7 });
+  assert.equal(await rejectedCall, undefined);
+
+  const endedCall = new Promise((resolve) =>
+    receiver.once("call:ended", resolve),
+  );
+  sender.emit("call:end", { targetUserId: 8 });
+  assert.equal(await endedCall, undefined);
+
   const typing = new Promise((resolve) =>
     receiver.once("chat:typing", resolve),
   );
