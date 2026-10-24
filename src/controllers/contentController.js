@@ -1,6 +1,7 @@
 const postModel = require("../models/postModel");
 const userModel = require("../models/userModel");
 const db = require("../config/db");
+const notificationModel = require("../models/notificationModel");
 
 // Get reels feed
 async function getReels(req, res) {
@@ -366,6 +367,66 @@ async function viewStory(req, res) {
   }
 }
 
+async function likeStory(req, res) {
+  const storyId = Number(req.params.storyId);
+  if (!Number.isSafeInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "A valid story ID is required",
+      isLiked: false,
+    });
+  }
+
+  try {
+    const userId = Number(req.user.id);
+    const likeStatus = await postModel.getStoryLikeStatus(storyId, userId);
+    if (!likeStatus) {
+      return res.status(404).json({
+        success: false,
+        message: "Active story not found",
+        isLiked: false,
+      });
+    }
+
+    if (likeStatus.likedByUser !== null) {
+      await postModel.deleteStoryLike(storyId, userId);
+      return res.status(200).json({
+        success: true,
+        message: "Story unliked",
+        isLiked: false,
+      });
+    }
+
+    await postModel.createStoryLike(storyId, userId);
+    await notificationModel.createNotification(
+      likeStatus.ownerId,
+      userId,
+      "like",
+      "story",
+      storyId,
+    );
+    return res.status(201).json({
+      success: true,
+      message: "Story liked",
+      isLiked: true,
+    });
+  } catch (error) {
+    console.error("Story like error:", error);
+    if (error.code === "ER_NO_SUCH_TABLE") {
+      return res.status(503).json({
+        success: false,
+        message: "Story likes require a database migration before they can be used",
+        isLiked: false,
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update story like",
+      isLiked: false,
+    });
+  }
+}
+
 async function deleteStory(req, res) {
   const storyId = Number(req.params.storyId);
   if (!Number.isSafeInteger(storyId) || storyId <= 0) {
@@ -390,5 +451,6 @@ module.exports = {
   getStories,
   createStory,
   viewStory,
+  likeStory,
   deleteStory,
 };

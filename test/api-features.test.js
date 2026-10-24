@@ -54,6 +54,7 @@ let chatIdempotencyEnabled = false;
 let storedMessages = [];
 let storedLikes = [];
 let storedStories = [];
+let storedStoryLikes = [];
 let storedReposts = [];
 let savedMessages = [];
 let savedReels = [];
@@ -700,6 +701,40 @@ async function fakeQuery(sql, params = []) {
     return [{ insertId: id }, []];
   }
 
+  if (
+    normalizedSql.startsWith(
+      "SELECT s.user_id AS ownerId, sl.user_id AS likedByUser",
+    )
+  ) {
+    const [userId, storyId] = params.map(Number);
+    const story = storedStories.find((item) => item.id === storyId);
+    if (!story || new Date(story.expiresAt).getTime() <= Date.now()) {
+      return [[], []];
+    }
+    const liked = storedStoryLikes.some(
+      (like) => like.story_id === storyId && like.user_id === userId,
+    );
+    return [
+      [{ ownerId: story.userId, likedByUser: liked ? userId : null }],
+      [],
+    ];
+  }
+
+  if (normalizedSql.startsWith("INSERT INTO story_likes")) {
+    const [storyId, userId] = params.map(Number);
+    storedStoryLikes.push({ story_id: storyId, user_id: userId });
+    return [{ affectedRows: 1 }, []];
+  }
+
+  if (normalizedSql.startsWith("DELETE FROM story_likes")) {
+    const [storyId, userId] = params.map(Number);
+    const previousLength = storedStoryLikes.length;
+    storedStoryLikes = storedStoryLikes.filter(
+      (like) => like.story_id !== storyId || like.user_id !== userId,
+    );
+    return [{ affectedRows: previousLength - storedStoryLikes.length }, []];
+  }
+
   if (normalizedSql.startsWith("SELECT s.*, u.username")) {
     assert.match(normalizedSql, /s\.expires_at > NOW\(\)/);
     const now = Date.now();
@@ -756,6 +791,7 @@ beforeEach(() => {
   storedMessages = [];
   storedLikes = [];
   storedStories = [];
+  storedStoryLikes = [];
   storedReposts = [];
   savedMessages = [];
   savedReels = [];
@@ -1333,6 +1369,39 @@ test("reel-like aliases use reel_id, toggle state, and never create post likes",
   assert.equal(postLike.status, 201);
   assert.equal(storedLikes.at(-1).post_id, 25);
   assert.equal(storedLikes.at(-1).reel_id, null);
+});
+
+test("story likes toggle only for active stories", async () => {
+  storedStories.push({
+    id: 21,
+    userId: 11,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  const liked = await request("/api/stories/21/like", { method: "POST" });
+  assert.equal(liked.status, 201);
+  assert.equal((await liked.json()).isLiked, true);
+  assert.deepEqual(storedStoryLikes, [{ story_id: 21, user_id: 7 }]);
+
+  const unliked = await request("/api/stories/21/like", { method: "POST" });
+  assert.equal(unliked.status, 200);
+  assert.equal((await unliked.json()).isLiked, false);
+  assert.deepEqual(storedStoryLikes, []);
+
+  const missingStory = await request("/api/stories/404/like", {
+    method: "POST",
+  });
+  assert.equal(missingStory.status, 404);
+
+  const invalidId = await request("/api/stories/not-an-id/like", {
+    method: "POST",
+  });
+  assert.equal(invalidId.status, 400);
+
+  const unauthenticated = await fetch(`${baseUrl}/api/stories/21/like`, {
+    method: "POST",
+  });
+  assert.equal(unauthenticated.status, 401);
 });
 
 test("reposts support posts and reels, are idempotent, and can only be removed by their owner", async () => {

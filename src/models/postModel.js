@@ -547,6 +547,32 @@ async function markStoryViewed(storyId, viewerId) {
   return true;
 }
 
+async function getStoryLikeStatus(storyId, userId) {
+  const [rows] = await db.query(
+    `SELECT s.user_id AS ownerId, sl.user_id AS likedByUser
+     FROM stories s
+     LEFT JOIN story_likes sl
+       ON sl.story_id = s.id AND sl.user_id = ?
+     WHERE s.id = ? AND s.expires_at > NOW()`,
+    [userId, storyId],
+  );
+  return rows[0] || null;
+}
+
+async function createStoryLike(storyId, userId) {
+  await db.query(
+    "INSERT INTO story_likes (story_id, user_id) VALUES (?, ?)",
+    [storyId, userId],
+  );
+}
+
+async function deleteStoryLike(storyId, userId) {
+  await db.query(
+    "DELETE FROM story_likes WHERE story_id = ? AND user_id = ?",
+    [storyId, userId],
+  );
+}
+
 async function deleteStory(storyId, userId) {
   const [result] = await db.query(
     "DELETE FROM stories WHERE id = ? AND user_id = ?",
@@ -942,6 +968,9 @@ module.exports = {
   createStory,
   getActiveStories,
   markStoryViewed,
+  getStoryLikeStatus,
+  createStoryLike,
+  deleteStoryLike,
   deleteStory,
   createMessage,
   getMessages,
