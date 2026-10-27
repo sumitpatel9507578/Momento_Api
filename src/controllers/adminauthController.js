@@ -1,8 +1,8 @@
 const jwt = require("jsonwebtoken");
 
 // Fixed admin credentials — no MySQL connection
-const ADMIN_EMAIL = "admin@momentz.app";
-const ADMIN_PASSWORD = "ChangeThisStrongPassword123!";
+const ADMIN_EMAIL = "admin@gmail.com";
+const ADMIN_PASSWORD = "admin1234";
 
 async function login(req, res) {
   try {
