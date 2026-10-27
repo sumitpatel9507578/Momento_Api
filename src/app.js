@@ -41,6 +41,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.use("/api/verification", verificationRoutes);
+app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin/verification", adminVerificationRoutes);
 app.use("/api/admin/stats", adminStatsRoutes);
 app.use("/api/auth", authRoutes);
