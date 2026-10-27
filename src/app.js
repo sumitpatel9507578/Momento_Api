@@ -20,6 +20,7 @@ const reportRoutes = require("./routes/reportRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const adminVerificationRoutes = require("./routes/adminVerificationRoutes");
 const adminStatsRoutes = require("./routes/adminStatsRoutes");
+const adminAuthRoutes = require("./routes/adminauthRoutes");
 
 const app = express();
 
