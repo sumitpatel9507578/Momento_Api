@@ -169,8 +169,11 @@ async function createPost(req, res) {
 // --- Social ---
 async function likePost(req, res) {
   try {
-    const pId = req.params.postId || req.query.postId || req.body.postId;
-    const rId = req.params.reelId || req.query.reelId || req.body.reelId;
+    const routeReelId = req.params.reelId;
+    const bodyReelId = req.query.reelId || req.query.reel_id || req.body.reelId || req.body.reel_id;
+    const rId = routeReelId || bodyReelId;
+    const bodyPostId = req.query.postId || req.query.post_id || req.body.postId || req.body.post_id;
+    const pId = rId ? null : req.params.postId || bodyPostId;
     const hasPostId = pId !== undefined && pId !== null && pId !== "";
     const hasReelId = rId !== undefined && rId !== null && rId !== "";
 

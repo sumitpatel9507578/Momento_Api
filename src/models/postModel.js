@@ -289,9 +289,20 @@ async function createComment(
   return result.insertId;
 }
 
+async function getCommentProfileImageSelect() {
+  const userCols = await getTableCols("users");
+  const profileColumn = userCols.includes("profileImage")
+    ? "profileImage"
+    : userCols.includes("profile_image")
+      ? "profile_image"
+      : null;
+  return profileColumn ? `u.${profileColumn} AS profileImage` : "NULL AS profileImage";
+}
+
 async function getCommentsByPostId(postId, viewerId = null) {
+  const profileImageSelect = await getCommentProfileImageSelect();
   const [rows] = await db.query(
-    `SELECT c.*, u.username, u.profileImage, u.full_name,
+    `SELECT c.*, u.username, ${profileImageSelect}, u.full_name,
             (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
             EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
      FROM comments c
@@ -304,8 +315,9 @@ async function getCommentsByPostId(postId, viewerId = null) {
 }
 
 async function getCommentsByReelId(reelId, viewerId = null) {
+  const profileImageSelect = await getCommentProfileImageSelect();
   const [rows] = await db.query(
-    `SELECT c.*, u.username, u.profileImage, u.profile_image, u.full_name,
+    `SELECT c.*, u.username, ${profileImageSelect}, u.full_name,
             (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
             EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
      FROM comments c
