@@ -299,15 +299,26 @@ async function getCommentProfileImageSelect() {
   return profileColumn ? `u.${profileColumn} AS profileImage` : "NULL AS profileImage";
 }
 
+function getExistingColumn(columns, camelCase, snakeCase) {
+  return columns.includes(camelCase)
+    ? camelCase
+    : columns.includes(snakeCase)
+      ? snakeCase
+      : null;
+}
+
 async function getCommentsByPostId(postId, viewerId = null) {
+  const commentCols = await getTableCols("comments");
+  const userIdColumn = getExistingColumn(commentCols, "userId", "user_id") || "user_id";
+  const postIdColumn = getExistingColumn(commentCols, "postId", "post_id") || "post_id";
   const profileImageSelect = await getCommentProfileImageSelect();
   const [rows] = await db.query(
     `SELECT c.*, u.username, ${profileImageSelect}, u.full_name,
             (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
             EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
      FROM comments c
-     JOIN users u ON c.user_id = u.id
-     WHERE c.post_id = ?
+     JOIN users u ON c.${userIdColumn} = u.id
+     WHERE c.${postIdColumn} = ?
      ORDER BY c.id DESC`,
     [viewerId, postId],
   );
@@ -315,16 +326,19 @@ async function getCommentsByPostId(postId, viewerId = null) {
 }
 
 async function getCommentsByReelId(reelId, viewerId = null) {
+  const commentCols = await getTableCols("comments");
+  const userIdColumn = getExistingColumn(commentCols, "userId", "user_id") || "user_id";
+  const reelIdColumn = getExistingColumn(commentCols, "reelId", "reel_id") || "reel_id";
   const profileImageSelect = await getCommentProfileImageSelect();
   const [rows] = await db.query(
     `SELECT c.*, u.username, ${profileImageSelect}, u.full_name,
             (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) AS likesCount,
             EXISTS (SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) AS isLiked
      FROM comments c
-     JOIN users u ON (c.userId = u.id OR c.user_id = u.id)
-     WHERE c.reelId = ? OR c.reel_id = ?
+     JOIN users u ON c.${userIdColumn} = u.id
+     WHERE c.${reelIdColumn} = ?
      ORDER BY c.id DESC`,
-    [viewerId, reelId, reelId],
+    [viewerId, reelId],
   );
   return rows;
 }
