@@ -21,6 +21,7 @@ const verificationRoutes = require("./routes/verificationRoutes");
 const adminVerificationRoutes = require("./routes/adminVerificationRoutes");
 const adminStatsRoutes = require("./routes/adminStatsRoutes");
 const adminAuthRoutes = require("./routes/adminauthRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use("/api/verification", verificationRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin/verification", adminVerificationRoutes);
 app.use("/api/admin/stats", adminStatsRoutes);
+app.use("/api", adminRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/follows", followRoutes);

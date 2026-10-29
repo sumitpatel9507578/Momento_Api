@@ -125,6 +125,19 @@ async function login(req, res) {
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
 
+    const isBlocked =
+      Number(userInDb.is_blocked) === 1 ||
+      Number(userInDb.is_active) === 0 ||
+      String(userInDb.status || "").toLowerCase() === "blocked";
+
+    if (isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Aapka account Admin dwara block kar diya gaya hai. Access Denied.",
+      });
+    }
+
     const isMatch = await bcrypt.compare(password, userInDb.password);
     if (!isMatch)
       return res
@@ -166,7 +179,9 @@ async function login(req, res) {
 async function refresh(req, res) {
   const { refreshToken } = req.body || {};
   if (typeof refreshToken !== "string" || !refreshToken) {
-    return res.status(400).json({ success: false, message: "refreshToken is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "refreshToken is required" });
   }
   try {
     const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
@@ -177,8 +192,14 @@ async function refresh(req, res) {
       "SELECT refresh_token FROM users WHERE id = ?",
       [decoded.id],
     );
-    if (!user || !rows[0]?.refresh_token || rows[0].refresh_token !== refreshToken) {
-      return res.status(401).json({ success: false, message: "Invalid refresh token" });
+    if (
+      !user ||
+      !rows[0]?.refresh_token ||
+      rows[0].refresh_token !== refreshToken
+    ) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid refresh token" });
     }
     const accessToken = jwt.sign(
       {
@@ -202,18 +223,27 @@ async function refresh(req, res) {
       data: { token: accessToken, refreshToken: rotatedRefreshToken },
     });
   } catch (error) {
-    if (error.name === "TokenExpiredError" || error.name === "JsonWebTokenError") {
-      return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });
+    if (
+      error.name === "TokenExpiredError" ||
+      error.name === "JsonWebTokenError"
+    ) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid or expired refresh token" });
     }
     console.error("Refresh token error:", error);
-    return res.status(500).json({ success: false, message: "Failed to refresh token" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to refresh token" });
   }
 }
 
 async function logout(req, res) {
   const { refreshToken } = req.body || {};
   if (typeof refreshToken !== "string" || !refreshToken) {
-    return res.status(400).json({ success: false, message: "refreshToken is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "refreshToken is required" });
   }
   try {
     const [result] = await db.query(
@@ -221,19 +251,32 @@ async function logout(req, res) {
       [req.user.id, refreshToken],
     );
     if (!result.affectedRows) {
-      return res.status(401).json({ success: false, message: "Invalid refresh token" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid refresh token" });
     }
     return res.json({ success: true, message: "Logged out successfully" });
   } catch (error) {
     console.error("Logout error:", error);
-    return res.status(500).json({ success: false, message: "Failed to log out" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to log out" });
   }
 }
 
 async function forgotPassword(req, res) {
-  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
-  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ success: false, message: "A valid email is required" });
+  const email =
+    typeof req.body?.email === "string"
+      ? req.body.email.trim().toLowerCase()
+      : "";
+  if (
+    !email ||
+    email.length > 254 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    return res
+      .status(400)
+      .json({ success: false, message: "A valid email is required" });
   }
   const deliveryUrl = process.env.PASSWORD_RESET_WEBHOOK_URL;
   if (!deliveryUrl) {
@@ -246,17 +289,31 @@ async function forgotPassword(req, res) {
   try {
     parsedDeliveryUrl = new URL(deliveryUrl);
   } catch {
-    return res.status(500).json({ success: false, message: "Password reset delivery is misconfigured" });
+    return res.status(500).json({
+      success: false,
+      message: "Password reset delivery is misconfigured",
+    });
   }
-  if (process.env.NODE_ENV === "production" && parsedDeliveryUrl.protocol !== "https:") {
-    return res.status(500).json({ success: false, message: "Password reset delivery must use HTTPS" });
+  if (
+    process.env.NODE_ENV === "production" &&
+    parsedDeliveryUrl.protocol !== "https:"
+  ) {
+    return res.status(500).json({
+      success: false,
+      message: "Password reset delivery must use HTTPS",
+    });
   }
   try {
     const user = await userModel.getUserByEmail(email);
     if (user) {
-      await db.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [user.id]);
+      await db.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [
+        user.id,
+      ]);
       const resetToken = crypto.randomBytes(32).toString("hex");
-      const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
+      const tokenHash = crypto
+        .createHash("sha256")
+        .update(resetToken)
+        .digest("hex");
       await db.query(
         `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
          VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))`,
@@ -268,7 +325,9 @@ async function forgotPassword(req, res) {
           headers: {
             "Content-Type": "application/json",
             ...(process.env.PASSWORD_RESET_WEBHOOK_SECRET
-              ? { Authorization: `Bearer ${process.env.PASSWORD_RESET_WEBHOOK_SECRET}` }
+              ? {
+                  Authorization: `Bearer ${process.env.PASSWORD_RESET_WEBHOOK_SECRET}`,
+                }
               : {}),
           },
           body: JSON.stringify({ email, resetToken, expiresInMinutes: 60 }),
@@ -287,21 +346,33 @@ async function forgotPassword(req, res) {
     }
     return res.json({
       success: true,
-      message: "If an account exists for this email, password reset instructions will be sent.",
+      message:
+        "If an account exists for this email, password reset instructions will be sent.",
     });
   } catch (error) {
     console.error("Forgot password error:", error);
-    return res.status(502).json({ success: false, message: "Password reset delivery failed" });
+    return res
+      .status(502)
+      .json({ success: false, message: "Password reset delivery failed" });
   }
 }
 
 async function resetPassword(req, res) {
   const { token, password } = req.body || {};
   if (typeof token !== "string" || !/^[a-f0-9]{64}$/i.test(token)) {
-    return res.status(400).json({ success: false, message: "A valid reset token is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "A valid reset token is required" });
   }
-  if (typeof password !== "string" || password.length < 8 || password.length > 128) {
-    return res.status(400).json({ success: false, message: "Password must be between 8 and 128 characters" });
+  if (
+    typeof password !== "string" ||
+    password.length < 8 ||
+    password.length > 128
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be between 8 and 128 characters",
+    });
   }
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   let connection;
@@ -317,23 +388,37 @@ async function resetPassword(req, res) {
     );
     if (!rows.length) {
       await connection.rollback();
-      return res.status(400).json({ success: false, message: "Reset token is invalid or expired" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Reset token is invalid or expired" });
     }
     const passwordHash = await bcrypt.hash(password, 10);
     await connection.query(
       "UPDATE users SET password = ?, access_token = NULL, refresh_token = NULL WHERE id = ?",
       [passwordHash, rows[0].user_id],
     );
-    await connection.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [rows[0].user_id]);
+    await connection.query(
+      "DELETE FROM password_reset_tokens WHERE user_id = ?",
+      [rows[0].user_id],
+    );
     await connection.commit();
     return res.json({ success: true, message: "Password reset successfully" });
   } catch (error) {
     if (transactionStarted) await connection.rollback();
     console.error("Reset password error:", error);
-    return res.status(500).json({ success: false, message: "Failed to reset password" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to reset password" });
   } finally {
     connection?.release();
   }
 }
 
-module.exports = { register, login, refresh, logout, forgotPassword, resetPassword };
+module.exports = {
+  register,
+  login,
+  refresh,
+  logout,
+  forgotPassword,
+  resetPassword,
+};

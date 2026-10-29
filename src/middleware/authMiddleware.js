@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const db = require("../config/db");
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authorization = req.headers.authorization;
   const token =
     authorization && authorization.startsWith("Bearer ")
@@ -35,6 +36,35 @@ function authMiddleware(req, res, next) {
 
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
+
+    if (
+      req.user.id === "momentz-static-admin" &&
+      String(req.user.role || "").toLowerCase() === "admin"
+    ) {
+      return next();
+    }
+
+    const [rows] = await db.query(
+      "SELECT id, is_blocked, status, is_active FROM users WHERE id = ? LIMIT 1",
+      [req.user.id],
+    );
+    const account = rows[0];
+    const isBlocked =
+      !account ||
+      Number(account.is_blocked) === 1 ||
+      Number(account.is_active) === 0 ||
+      String(account.status || "").toLowerCase() === "blocked";
+
+    if (isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: account
+          ? "Account is blocked by Admin."
+          : "Authenticated account is not available",
+        data: null,
+      });
+    }
+
     console.log(
       `[AUTH] Verification success: User ${req.user.username} (ID: ${req.user.id})`,
     );
