@@ -5,7 +5,7 @@ const app = require("./src/app");
 const db = require("./src/config/db");
 const attachChatSocket = require("./src/services/chatSocket");
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3500;
 
 // Verify the database before starting the HTTP server
 async function startServer() {
