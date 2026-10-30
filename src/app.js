@@ -22,6 +22,7 @@ const adminVerificationRoutes = require("./routes/adminVerificationRoutes");
 const adminStatsRoutes = require("./routes/adminStatsRoutes");
 const adminAuthRoutes = require("./routes/adminauthRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const adminManagementRoutes = require("./routes/adminManagementRoutes");
 
 const app = express();
 
@@ -43,6 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.use("/api/verification", verificationRoutes);
 app.use("/api/admin", adminAuthRoutes);
+app.use("/api/admin", adminManagementRoutes);
 app.use("/api/admin/verification", adminVerificationRoutes);
 app.use("/api/admin/stats", adminStatsRoutes);
 app.use("/api", adminRoutes);

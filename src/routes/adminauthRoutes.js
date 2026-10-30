@@ -1,10 +1,24 @@
 const router = require("express").Router();
-const { login } = require("../controllers/adminauthController");
+const {
+  login,
+  register,
+  profile,
+  updateProfile,
+  changePassword,
+} = require("../controllers/adminauthController");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const db = require("../config/db");
+const sensitiveRateLimit = require("../middleware/sensitiveRateLimit");
 
-router.post("/login", login);
+router.post("/login", sensitiveRateLimit(15 * 60 * 1000, 10), login);
+router.post("/register", sensitiveRateLimit(15 * 60 * 1000, 5), register);
+router.post("/auth/register", sensitiveRateLimit(15 * 60 * 1000, 5), register);
+router.get("/profile", authMiddleware, adminMiddleware, profile);
+router.put("/profile", authMiddleware, adminMiddleware, updateProfile);
+router.patch("/profile", authMiddleware, adminMiddleware, updateProfile);
+router.put("/password", authMiddleware, adminMiddleware, changePassword);
+router.post("/change-password", authMiddleware, adminMiddleware, changePassword);
 
 async function setUserBlockState(req, res, blocked) {
   const userId = req.params.id;

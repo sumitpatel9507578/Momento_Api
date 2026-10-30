@@ -2,6 +2,7 @@ const postModel = require("../models/postModel");
 const userModel = require("../models/userModel");
 const db = require("../config/db");
 const notificationModel = require("../models/notificationModel");
+const { trackContentView } = require("../services/contentViewTracker");
 
 // Get reels feed
 async function getReels(req, res) {
@@ -42,6 +43,7 @@ async function getReel(req, res) {
         message: "Reel not found",
       });
     }
+    void trackContentView("reel", reelId, req.user.id);
 
     return res.status(200).json({
       success: true,

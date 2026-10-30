@@ -37,13 +37,6 @@ async function authMiddleware(req, res, next) {
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
 
-    if (
-      req.user.id === "momentz-static-admin" &&
-      String(req.user.role || "").toLowerCase() === "admin"
-    ) {
-      return next();
-    }
-
     const [rows] = await db.query(
       "SELECT id, is_blocked, status, is_active FROM users WHERE id = ? LIMIT 1",
       [req.user.id],

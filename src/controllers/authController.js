@@ -32,7 +32,28 @@ async function register(req, res) {
       });
     }
 
-    if (req.body.registrationType === "admin" || req.body.role === "admin") {
+    if (
+      req.body.registrationType === "admin" ||
+      req.body.adminCode !== undefined
+    ) {
+      if (!process.env.ADMIN_REGISTRATION_CODE) {
+        return res.status(500).json({
+          success: false,
+          message: "Admin registration is not configured",
+        });
+      }
+      const crypto = require("node:crypto");
+      const expected = Buffer.from(String(process.env.ADMIN_REGISTRATION_CODE));
+      const supplied = Buffer.from(String(req.body.adminCode || "").trim());
+      const codeMatches =
+        expected.length === supplied.length &&
+        crypto.timingSafeEqual(expected, supplied);
+      if (!codeMatches) {
+        return res.status(403).json({
+          success: false,
+          message: "Invalid admin registration code",
+        });
+      }
       assignedRole = "admin";
     }
 

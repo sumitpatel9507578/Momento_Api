@@ -1,6 +1,7 @@
 const postModel = require("../models/postModel");
 const db = require("../config/db");
 const notificationModel = require("../models/notificationModel");
+const { trackContentView } = require("../services/contentViewTracker");
 
 // --- Feed ---
 async function getFeed(req, res) {
@@ -53,6 +54,7 @@ async function getPost(req, res) {
   try {
     const post = await postModel.getPostById(postId, Number(req.user.id));
     if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+    void trackContentView("post", postId, req.user.id);
     return res.json({ success: true, data: post });
   } catch (error) {
     console.error("Get post error:", error);
